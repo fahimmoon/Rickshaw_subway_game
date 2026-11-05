@@ -1,0 +1,40 @@
+declare module 'lucide-react' {
+  import * as React from 'react';
+  export type LucideIcon = React.FC<React.SVGProps<SVGSVGElement> & { size?: number | string; className?: string }>;
+  export const Volume2: LucideIcon;
+  export const VolumeX: LucideIcon;
+  export const Play: LucideIcon;
+  export const RotateCcw: LucideIcon;
+  export const Zap: LucideIcon;
+  export const Shield: LucideIcon;
+  export const Trophy: LucideIcon;
+  export const Coins: LucideIcon;
+  export const Gauge: LucideIcon;
+  export const ArrowUp: LucideIcon;
+  export const ArrowDown: LucideIcon;
+  export const ArrowLeft: LucideIcon;
+  export const ArrowRight: LucideIcon;
+  export const Flame: LucideIcon;
+  export const AlertTriangle: LucideIcon;
+  export const Radio: LucideIcon;
+  export const Sparkles: LucideIcon;
+  export const HelpCircle: LucideIcon;
+  export const X: LucideIcon;
+  export const Palette: LucideIcon;
+  export const Award: LucideIcon;
+  export const CloudRain: LucideIcon;
+  export const Sun: LucideIcon;
+  export const Sunrise: LucideIcon;
+  export const Moon: LucideIcon;
+  export const ChevronRight: LucideIcon;
+  export const CheckCircle2: LucideIcon;
+  export const Lock: LucideIcon;
+  export const Pause: LucideIcon;
+  export const PlayCircle: LucideIcon;
+  export const Car: LucideIcon;
+  export const Truck: LucideIcon;
+  export const Bike: LucideIcon;
+  export const Terminal: LucideIcon;
+  export const Activity: LucideIcon;
+}
+
