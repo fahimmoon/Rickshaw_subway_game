@@ -11,6 +11,11 @@ export class TextureCache {
   private static puddleReflection: THREE.CanvasTexture | null = null;
   private static carGrille: THREE.CanvasTexture | null = null;
   private static headlampLens: THREE.CanvasTexture | null = null;
+  private static shopSignCache: Map<string, THREE.CanvasTexture> = new Map();
+  private static neonBillboardCache: Map<string, THREE.CanvasTexture> = new Map();
+  private static cngLogoTex: THREE.CanvasTexture | null = null;
+  private static archTextureCache: Map<string, THREE.CanvasTexture> = new Map();
+  private static heritageFacade: THREE.CanvasTexture | null = null;
 
   // Realistic Weathered Asphalt with cracks, oil stains, aggregate micro-texture & Normal Bump
   public static getAsphaltPBR(): { map: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture; normalMap: THREE.CanvasTexture } {
@@ -605,6 +610,9 @@ export class TextureCache {
   }
 
   public static getShopSign(text: string, subText = '', bgColor = '#facc15', textColor = '#0f172a'): THREE.CanvasTexture {
+    const key = `${text}_${subText}_${bgColor}_${textColor}`;
+    if (this.shopSignCache.has(key)) return this.shopSignCache.get(key)!;
+
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 140;
@@ -635,10 +643,15 @@ export class TextureCache {
       ctx.fillText(subText, 256, 96);
     }
 
-    return new THREE.CanvasTexture(canvas);
+    const tex = new THREE.CanvasTexture(canvas);
+    this.shopSignCache.set(key, tex);
+    return tex;
   }
 
   public static getNeonBillboard(title: string, sub: string): THREE.CanvasTexture {
+    const key = `${title}_${sub}`;
+    if (this.neonBillboardCache.has(key)) return this.neonBillboardCache.get(key)!;
+
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 180;
@@ -661,7 +674,9 @@ export class TextureCache {
     ctx.font = 'bold 22px "Plus Jakarta Sans", sans-serif';
     ctx.fillText(sub, 256, 125);
 
-    return new THREE.CanvasTexture(canvas);
+    const tex = new THREE.CanvasTexture(canvas);
+    this.neonBillboardCache.set(key, tex);
+    return tex;
   }
 
   public static getBumperArt(): THREE.CanvasTexture {
@@ -731,6 +746,8 @@ export class TextureCache {
 
   // Authentic Pakistani Green CNG Cylinder Stencil
   public static getCNGLogo(): THREE.CanvasTexture {
+    if (this.cngLogoTex) return this.cngLogoTex;
+
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 128;
@@ -765,11 +782,15 @@ export class TextureCache {
     ctx.font = 'bold 13px sans-serif';
     ctx.fillText('PAKISTAN CLEAN FUEL', 128, 102);
 
-    return new THREE.CanvasTexture(canvas);
+    this.cngLogoTex = new THREE.CanvasTexture(canvas);
+    return this.cngLogoTex;
   }
 
   // Ceremonial Road Arch Banner ("Welcome to Lahore / Dekh Magar Pyar Se")
   public static getOverheadArchTexture(title = 'WELCOME TO LAHORE MALL ROAD', subtitle = 'خوش آمدید - شاہراہ قائد اعظم'): THREE.CanvasTexture {
+    const key = `${title}_${subtitle}`;
+    if (this.archTextureCache.has(key)) return this.archTextureCache.get(key)!;
+
     const canvas = document.createElement('canvas');
     canvas.width = 1024;
     canvas.height = 160;
@@ -833,11 +854,15 @@ export class TextureCache {
     ctx.fillText(subtitle, 512, 110);
     ctx.shadowBlur = 0;
 
-    return new THREE.CanvasTexture(canvas);
+    const tex = new THREE.CanvasTexture(canvas);
+    this.archTextureCache.set(key, tex);
+    return tex;
   }
 
   // Mughal Heritage Brickwork with Cusped Arch Windows
   public static getHeritageMughalFacade(): THREE.CanvasTexture {
+    if (this.heritageFacade) return this.heritageFacade;
+
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 512;
@@ -901,6 +926,7 @@ export class TextureCache {
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(2, 2);
+    this.heritageFacade = tex;
     return tex;
   }
 }

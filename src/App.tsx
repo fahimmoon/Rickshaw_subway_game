@@ -318,8 +318,9 @@ export default function App() {
 
         if (changed) {
           localStorage.setItem('rickshaw_quests', JSON.stringify(updated));
+          return updated;
         }
-        return updated;
+        return prevQuests;
       });
 
       if (newStats.state === 'GAMEOVER' && newStats.distance > newStats.bestScore && newStats.distance > 50) {
@@ -363,11 +364,33 @@ export default function App() {
     }
   }, [showGarage]);
 
-  // Keyboard Handlers
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
+
+  const showGarageRef = useRef(showGarage);
+  showGarageRef.current = showGarage;
+
+  const showQuestsRef = useRef(showQuests);
+  showQuestsRef.current = showQuests;
+
+  const showHowToPlayRef = useRef(showHowToPlay);
+  showHowToPlayRef.current = showHowToPlay;
+
+  const showDebugRef = useRef(showDebug);
+  showDebugRef.current = showDebug;
+
+  // Keyboard Handlers (Fixed listener leak: attached once with stable refs)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return; // Prevent key repeat floods
       const engine = engineRef.current;
       if (!engine) return;
+
+      const currentStats = statsRef.current;
+      const isGarageOpen = showGarageRef.current;
+      const isQuestsOpen = showQuestsRef.current;
+      const isHowToPlayOpen = showHowToPlayRef.current;
+      const isDebugOpen = showDebugRef.current;
 
       if (e.code === 'Backquote' || e.code === 'F2' || e.key === '`' || e.key === '~') {
         e.preventDefault();
@@ -376,7 +399,7 @@ export default function App() {
       }
 
       // When Debug Overlay is active, route debug hotkeys (H, C, L, K, G, F) while still allowing normal driving!
-      if (showDebug) {
+      if (isDebugOpen) {
         if (e.code === 'KeyH') {
           e.preventDefault();
           engine.toggleHeightOverlay();
@@ -409,7 +432,7 @@ export default function App() {
         }
       }
 
-      if (showGarage || showQuests || showHowToPlay) {
+      if (isGarageOpen || isQuestsOpen || isHowToPlayOpen) {
         if (e.code === 'Escape') {
           setShowGarage(false);
           setShowQuests(false);
@@ -418,7 +441,7 @@ export default function App() {
         return;
       }
 
-      if (stats.state === 'START') {
+      if (currentStats.state === 'START') {
         if (e.code === 'Space' || e.code === 'Enter') {
           e.preventDefault();
           engine.start();
@@ -426,10 +449,10 @@ export default function App() {
         return;
       }
 
-      if (stats.state === 'GAMEOVER') {
+      if (currentStats.state === 'GAMEOVER') {
         if (e.code === 'Space' || e.code === 'KeyR' || e.code === 'Enter') {
           e.preventDefault();
-          if (stats.arrestPhase !== 'COMPLETE' && stats.arrestPhase !== 'NONE') {
+          if (currentStats.arrestPhase !== 'COMPLETE' && currentStats.arrestPhase !== 'NONE') {
             engine.skipArrestCutscene();
           } else {
             engine.restart();
@@ -494,7 +517,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [stats.state, stats.arrestPhase, showGarage, showQuests, showHowToPlay, showDebug]);
+  }, []);
 
   // Enhanced Mobile Touch & Swipe Handling (Instant low-threshold response)
   const touchStartPos = useRef<{ x: number; y: number; time: number } | null>(null);

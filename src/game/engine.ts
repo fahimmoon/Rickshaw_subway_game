@@ -92,11 +92,154 @@ import {
   getActiveFlyovers,
   getActiveBusRamps
 } from './terrain';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Module-level reusable scratch vectors & matrices (zero allocation in physics & render loop)
 const _scratchVec1 = new THREE.Vector3();
 const _scratchVec2 = new THREE.Vector3();
 const _scratchMatrix = new THREE.Matrix4();
+
+// Module-level shared static chunk road assets (merged, zero per-spawn allocation)
+let _chunkGroundGeo: THREE.PlaneGeometry | null = null;
+let _chunkGroundMat: THREE.Material | null = null;
+let _chunkRoadGeo: THREE.PlaneGeometry | null = null;
+let _chunkRoadMat: THREE.Material | null = null;
+let _chunkLineMarkingsGeo: THREE.BufferGeometry | null = null;
+let _chunkLineMat: THREE.Material | null = null;
+let _chunkStudsGeo: THREE.BufferGeometry | null = null;
+let _chunkStudMat: THREE.Material | null = null;
+let _chunkShoulderGeo: THREE.BufferGeometry | null = null;
+let _chunkShoulderMat: THREE.Material | null = null;
+let _chunkCurbsGeo: THREE.BufferGeometry | null = null;
+let _chunkCurbMat: THREE.Material | null = null;
+let _chunkSidewalksGeo: THREE.BufferGeometry | null = null;
+let _chunkSidewalkMat: THREE.Material | null = null;
+let _chunkLampMetalGeo: THREE.BufferGeometry | null = null;
+let _chunkLampMetalMat: THREE.Material | null = null;
+let _chunkLampBulbsGeo: THREE.BufferGeometry | null = null;
+let _chunkLampBulbMat: THREE.Material | null = null;
+
+function initSharedChunkAssets() {
+  if (_chunkGroundGeo) return;
+
+  const roadW = GAME_CONFIG.ROAD_WIDTH;
+  const sidewalkW = 5.0;
+  const chunkLen = GAME_CONFIG.CHUNK_LENGTH;
+
+  // Ground plane
+  _chunkGroundGeo = new THREE.PlaneGeometry(220, chunkLen);
+  _chunkGroundGeo.rotateX(-Math.PI / 2);
+  _chunkGroundMat = createGameMaterial({
+    color: 0x334155,
+    roughness: 0.95,
+    metalness: 0.05
+  });
+
+  // Road asphalt
+  const pbr = TextureCache.getAsphaltPBR();
+  _chunkRoadGeo = new THREE.PlaneGeometry(roadW, chunkLen, 1, 1);
+  _chunkRoadGeo.rotateX(-Math.PI / 2);
+  _chunkRoadMat = createGameMaterial({
+    map: pbr.map,
+    roughnessMap: pbr.roughnessMap,
+    normalMap: pbr.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughness: 0.18,
+    metalness: 0.45
+  });
+
+  // Dashed lines & Directional arrows (merged into single geometry)
+  const lineParts: THREE.BufferGeometry[] = [];
+  [-2.0, 2.0].forEach((lx) => {
+    for (let dz = -chunkLen / 2 + 3; dz < chunkLen / 2; dz += 6) {
+      const g = new THREE.PlaneGeometry(0.22, 3.5);
+      g.rotateX(-Math.PI / 2);
+      g.translate(lx, ROAD_Y + 0.015, dz);
+      lineParts.push(g);
+    }
+  });
+  [-4.0, 0, 4.0].forEach((ax) => {
+    const arrow = new THREE.PlaneGeometry(0.7, 2.4);
+    arrow.rotateX(-Math.PI / 2);
+    arrow.translate(ax, ROAD_Y + 0.018, -10);
+    lineParts.push(arrow);
+  });
+  _chunkLineMarkingsGeo = mergeGeometries(lineParts, false);
+  lineParts.forEach((g) => g.dispose());
+  _chunkLineMat = createGameMaterial({ kind: 'basic', color: 0xf8fafc });
+
+  // Studs
+  const studParts: THREE.BufferGeometry[] = [];
+  [-2.0, 2.0].forEach((rx) => {
+    for (let rz = -chunkLen / 2 + 1; rz < chunkLen / 2; rz += 8) {
+      const stud = new THREE.BoxGeometry(0.14, 0.04, 0.14);
+      stud.translate(rx, ROAD_Y + 0.02, rz);
+      studParts.push(stud);
+    }
+  });
+  _chunkStudsGeo = mergeGeometries(studParts, false);
+  studParts.forEach((g) => g.dispose());
+  _chunkStudMat = createGameMaterial({ kind: 'basic', color: 0xfef08a });
+
+  // Yellow shoulders
+  const shoulderParts: THREE.BufferGeometry[] = [];
+  [-roadW / 2 + 0.3, roadW / 2 - 0.3].forEach((sx) => {
+    const s = new THREE.PlaneGeometry(0.2, chunkLen);
+    s.rotateX(-Math.PI / 2);
+    s.translate(sx, ROAD_Y + 0.016, 0);
+    shoulderParts.push(s);
+  });
+  _chunkShoulderGeo = mergeGeometries(shoulderParts, false);
+  shoulderParts.forEach((g) => g.dispose());
+  _chunkShoulderMat = createGameMaterial({ kind: 'basic', color: 0xfacc15 });
+
+  // Curbs
+  const curbParts: THREE.BufferGeometry[] = [];
+  [-1, 1].forEach((side) => {
+    const curb = new THREE.BoxGeometry(0.4, SIDEWALK_Y + 0.05, chunkLen);
+    curb.translate(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, 0);
+    curbParts.push(curb);
+  });
+  _chunkCurbsGeo = mergeGeometries(curbParts, false);
+  curbParts.forEach((g) => g.dispose());
+  _chunkCurbMat = createGameMaterial({ color: 0xf59e0b, roughness: 0.5 });
+
+  // Sidewalks
+  const walkParts: THREE.BufferGeometry[] = [];
+  [-1, 1].forEach((side) => {
+    const walk = new THREE.BoxGeometry(sidewalkW, SIDEWALK_Y, chunkLen);
+    walk.translate(side * (roadW / 2 + 0.4 + sidewalkW / 2), SIDEWALK_Y * 0.5, 0);
+    walkParts.push(walk);
+  });
+  _chunkSidewalksGeo = mergeGeometries(walkParts, false);
+  walkParts.forEach((g) => g.dispose());
+  _chunkSidewalkMat = createGameMaterial({ color: 0x64748b, roughness: 0.8 });
+
+  // Streetlamps Metal (poles and arms) & Bulbs
+  const lampMetalParts: THREE.BufferGeometry[] = [];
+  const bulbParts: THREE.BufferGeometry[] = [];
+  [-1, 1].forEach((side) => {
+    const pole = new THREE.CylinderGeometry(0.08, 0.12, 5.8, 8);
+    pole.translate(side * (roadW / 2 + 1.2), SIDEWALK_Y + 2.9, 0);
+    lampMetalParts.push(pole);
+
+    const arm = new THREE.CylinderGeometry(0.04, 0.04, 1.2, 6);
+    arm.rotateZ(side > 0 ? -0.4 : 0.4);
+    arm.translate(side * (roadW / 2 + 0.8), SIDEWALK_Y + 5.7, 0);
+    lampMetalParts.push(arm);
+
+    const bulb = new THREE.SphereGeometry(0.28, 8, 8);
+    bulb.translate(side * (roadW / 2 + 0.4), SIDEWALK_Y + 5.6, 0);
+    bulbParts.push(bulb);
+  });
+  _chunkLampMetalGeo = mergeGeometries(lampMetalParts, false);
+  lampMetalParts.forEach((g) => g.dispose());
+  _chunkLampMetalMat = createGameMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.25 });
+
+  _chunkLampBulbsGeo = mergeGeometries(bulbParts, false);
+  bulbParts.forEach((g) => g.dispose());
+  _chunkLampBulbMat = createGameMaterial({ kind: 'basic', color: 0xfef08a });
+}
 
 export interface GameStats {
   distance: number;
@@ -321,6 +464,15 @@ export class SubwayRickshawEngine {
   private activePowerups: THREE.Group[] = [];
   private particles: Particle[] = [];
 
+  // Particle & Puddle Pools (zero allocation during play)
+  private puffPool: THREE.Mesh[] = [];
+  private sparklePool: THREE.Mesh[] = [];
+  private activePuddles: { puddle: THREE.Mesh; chunk: THREE.Group }[] = [];
+  private sharedPuffGeo = new THREE.SphereGeometry(0.12, 6, 6);
+  private sharedPuffMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.5 });
+  private sharedSparkleGeo = new THREE.SphereGeometry(0.14, 6, 6);
+  private sharedSparkleMat = new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.8 });
+
   // Object Pools
   private carPool: THREE.Group[] = [];
   private coinPool: THREE.Mesh[] = [];
@@ -399,7 +551,7 @@ export class SubwayRickshawEngine {
     this.scene.fog = new THREE.Fog(GAME_CONFIG.FOG_COLOR, GAME_CONFIG.FOG_NEAR, GAME_CONFIG.FOG_FAR);
 
     const aspect = window.innerWidth / window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(58, aspect, 0.1, 620);
+    this.camera = new THREE.PerspectiveCamera(58, aspect, 0.1, 2500);
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -407,7 +559,7 @@ export class SubwayRickshawEngine {
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     this.createSkyDome();
 
@@ -578,6 +730,22 @@ export class SubwayRickshawEngine {
       this.coinPool.push(coin);
       this.scene.add(coin);
     }
+
+    // Pre-allocate exhaust puff mesh pool (zero runtime allocations)
+    for (let i = 0; i < 28; i++) {
+      const puff = new THREE.Mesh(this.sharedPuffGeo, this.sharedPuffMat.clone());
+      puff.visible = false;
+      this.puffPool.push(puff);
+      this.scene.add(puff);
+    }
+
+    // Pre-allocate coin sparkle pool (zero runtime allocations)
+    for (let i = 0; i < 32; i++) {
+      const sparkle = new THREE.Mesh(this.sharedSparkleGeo, this.sharedSparkleMat.clone());
+      sparkle.visible = false;
+      this.sparklePool.push(sparkle);
+      this.scene.add(sparkle);
+    }
   }
 
   private handleResize = () => {
@@ -670,10 +838,10 @@ export class SubwayRickshawEngine {
     this.originZOffset = 0;
     this.nextSpawnZ = 0;
     for (let i = 0; i < GAME_CONFIG.ACTIVE_CHUNKS; i++) {
-      const zPos = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH - this.originZOffset;
+      const zPos = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH;
       this.spawnChunk(zPos, this.nextChunkIndex);
       this.nextChunkIndex++;
-      this.nextSpawnZ = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH - this.originZOffset;
+      this.nextSpawnZ = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH;
     }
     this.unpatchedCount = auditCurve(this.scene).length;
   }
@@ -687,42 +855,56 @@ export class SubwayRickshawEngine {
     const roadW = GAME_CONFIG.ROAD_WIDTH;
     const sidewalkW = 5.0;
 
-    // Continuous Ground Plane at GROUND_Y (-0.05) extending far beyond sidewalks so there is never a blue void
-    const groundPlaneMat = createGameMaterial({
-      color: 0x334155,
-      roughness: 0.95,
-      metalness: 0.05
-    });
-    const groundPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(220, GAME_CONFIG.CHUNK_LENGTH),
-      groundPlaneMat
-    );
-    groundPlane.rotation.x = -Math.PI / 2;
+    initSharedChunkAssets();
+
+    // Continuous Ground Plane at GROUND_Y (-0.05) extending far beyond sidewalks
+    const groundPlane = new THREE.Mesh(_chunkGroundGeo!, _chunkGroundMat!);
     groundPlane.position.set(0, GROUND_Y, 0);
     groundPlane.frustumCulled = false;
     chunk.add(groundPlane);
 
-    // High-Resolution Rain-Slicked Wet Asphalt PBR Shader Material (curve-patched via createGameMaterial)
-    const pbr = TextureCache.getAsphaltPBR();
-    const roadMat = createGameMaterial({
-      map: pbr.map,
-      roughnessMap: pbr.roughnessMap,
-      normalMap: pbr.normalMap,
-      normalScale: new THREE.Vector2(0.85, 0.85),
-      roughness: 0.18,
-      metalness: 0.45
-    });
-
-    const road = new THREE.Mesh(
-      new THREE.PlaneGeometry(roadW, GAME_CONFIG.CHUNK_LENGTH, 1, 1),
-      roadMat
-    );
-    road.rotation.x = -Math.PI / 2;
+    // High-Resolution Rain-Slicked Wet Asphalt PBR Shader Material
+    const road = new THREE.Mesh(_chunkRoadGeo!, _chunkRoadMat!);
     road.position.set(0, ROAD_Y, 0);
     road.frustumCulled = false;
     chunk.add(road);
 
-    // Multi-Layer Roadside Puddles at exact ROAD_Y
+    // Pre-merged Dashed White Lane Lines & Directional Arrows (1 draw call)
+    const lineMarkings = new THREE.Mesh(_chunkLineMarkingsGeo!, _chunkLineMat!);
+    lineMarkings.frustumCulled = false;
+    chunk.add(lineMarkings);
+
+    // Pre-merged Reflective Cat's-Eye Studs (1 draw call)
+    const studs = new THREE.Mesh(_chunkStudsGeo!, _chunkStudMat!);
+    studs.frustumCulled = false;
+    chunk.add(studs);
+
+    // Pre-merged Yellow Shoulder Striping (1 draw call)
+    const shoulders = new THREE.Mesh(_chunkShoulderGeo!, _chunkShoulderMat!);
+    shoulders.frustumCulled = false;
+    chunk.add(shoulders);
+
+    // Pre-merged Curbs (1 draw call)
+    const curbs = new THREE.Mesh(_chunkCurbsGeo!, _chunkCurbMat!);
+    curbs.frustumCulled = false;
+    chunk.add(curbs);
+
+    // Pre-merged Sidewalks (1 draw call)
+    const sidewalks = new THREE.Mesh(_chunkSidewalksGeo!, _chunkSidewalkMat!);
+    sidewalks.frustumCulled = false;
+    chunk.add(sidewalks);
+
+    // Pre-merged Ornate Streetlamps Metal (poles & arms) (1 draw call)
+    const lamps = new THREE.Mesh(_chunkLampMetalGeo!, _chunkLampMetalMat!);
+    lamps.frustumCulled = false;
+    chunk.add(lamps);
+
+    // Pre-merged Streetlamp Bulbs (1 draw call)
+    const bulbs = new THREE.Mesh(_chunkLampBulbsGeo!, _chunkLampBulbMat!);
+    bulbs.frustumCulled = false;
+    chunk.add(bulbs);
+
+    // Multi-Layer Roadside Puddles at exact ROAD_Y (tracked in activePuddles)
     const numPuddles = 2;
     for (let p = 0; p < numPuddles; p++) {
       const puddle = createPuddle(1.6, 3.2);
@@ -732,95 +914,10 @@ export class SubwayRickshawEngine {
         -GAME_CONFIG.CHUNK_LENGTH / 2 + (p + 0.5) * (GAME_CONFIG.CHUNK_LENGTH / numPuddles)
       );
       chunk.add(puddle);
+      this.activePuddles.push({ puddle, chunk });
     }
 
-    // Dashed White Lane Lines
-    const lineMat = createGameMaterial({ kind: 'basic', color: 0xf8fafc });
-    [-2.0, 2.0].forEach((lx) => {
-      for (let dz = -GAME_CONFIG.CHUNK_LENGTH / 2 + 3; dz < GAME_CONFIG.CHUNK_LENGTH / 2; dz += 6) {
-        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 3.5), lineMat);
-        dash.rotation.x = -Math.PI / 2;
-        dash.position.set(lx, ROAD_Y + 0.015, dz);
-        dash.frustumCulled = false;
-        chunk.add(dash);
-      }
-    });
-
-    // Directional Arrows
-    [-4.0, 0, 4.0].forEach((ax) => {
-      const arrow = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 2.4), lineMat);
-      arrow.rotation.x = -Math.PI / 2;
-      arrow.position.set(ax, ROAD_Y + 0.018, -10);
-      arrow.frustumCulled = false;
-      chunk.add(arrow);
-    });
-
-    // Reflective Cat's-Eye Studs
-    const studMat = createGameMaterial({ kind: 'basic', color: 0xfef08a });
-    [-2.0, 2.0].forEach((rx) => {
-      for (let rz = -GAME_CONFIG.CHUNK_LENGTH / 2 + 1; rz < GAME_CONFIG.CHUNK_LENGTH / 2; rz += 8) {
-        const stud = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.04, 0.14), studMat);
-        stud.position.set(rx, ROAD_Y + 0.02, rz);
-        stud.frustumCulled = false;
-        chunk.add(stud);
-      }
-    });
-
-    // Yellow Shoulder Striping
-    const shoulderMat = createGameMaterial({ kind: 'basic', color: 0xfacc15 });
-    [-roadW / 2 + 0.3, roadW / 2 - 0.3].forEach((sx) => {
-      const line = new THREE.Mesh(new THREE.PlaneGeometry(0.2, GAME_CONFIG.CHUNK_LENGTH), shoulderMat);
-      line.rotation.x = -Math.PI / 2;
-      line.position.set(sx, ROAD_Y + 0.016, 0);
-      line.frustumCulled = false;
-      chunk.add(line);
-    });
-
-    // Sidewalks (top surface at exact SIDEWALK_Y = 0.2), Buildings (base at ROAD_Y = 0), Streetlights, and Pedestrians
-    const sidewalkMat = createGameMaterial({ color: 0x64748b, roughness: 0.8 });
-    const curbMat = createGameMaterial({ color: 0xf59e0b, roughness: 0.5 });
-    const lampMetalMat = createGameMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.25 });
-    const bulbMat = createGameMaterial({ kind: 'basic', color: 0xfef08a });
-
     [-1, 1].forEach((side) => {
-      // Curb seamlessly joins road edge (x = ±7.0) to sidewalk strip (x = ±7.4)
-      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.4, SIDEWALK_Y + 0.05, GAME_CONFIG.CHUNK_LENGTH), curbMat);
-      curb.position.set(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, 0);
-      curb.frustumCulled = false;
-      chunk.add(curb);
-
-      // Sidewalk box height = SIDEWALK_Y (0.2), centered at SIDEWALK_Y * 0.5 (0.1) so top surface is at exact SIDEWALK_Y = 0.2
-      const walk = new THREE.Mesh(new THREE.BoxGeometry(sidewalkW, SIDEWALK_Y, GAME_CONFIG.CHUNK_LENGTH), sidewalkMat);
-      walk.position.set(side * (roadW / 2 + 0.4 + sidewalkW / 2), SIDEWALK_Y * 0.5, 0);
-      walk.frustumCulled = false;
-      chunk.add(walk);
-
-      // Ornate Streetlamp with base anchored at exact SIDEWALK_Y
-      const lamp = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.12, 5.8, 8),
-        lampMetalMat
-      );
-      lamp.position.set(side * (roadW / 2 + 1.2), SIDEWALK_Y + 2.9, 0);
-      lamp.frustumCulled = false;
-      chunk.add(lamp);
-
-      const arm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04, 0.04, 1.2, 6),
-        lampMetalMat
-      );
-      arm.rotation.z = side > 0 ? -0.4 : 0.4;
-      arm.position.set(side * (roadW / 2 + 0.8), SIDEWALK_Y + 5.7, 0);
-      arm.frustumCulled = false;
-      chunk.add(arm);
-
-      const bulb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.28, 8, 8),
-        bulbMat
-      );
-      bulb.position.set(side * (roadW / 2 + 0.4), SIDEWALK_Y + 5.6, 0);
-      bulb.frustumCulled = false;
-      chunk.add(bulb);
-
       // Palm Trees anchored on sidewalk at exact SIDEWALK_Y
       [-14, 0, 14].forEach((pz) => {
         const palm = createPalmTree();
@@ -890,7 +987,7 @@ export class SubwayRickshawEngine {
     this.scene.add(chunk);
     this.roadChunks.push(chunk);
 
-    if (Math.abs(zPos + this.originZOffset) > 40) {
+    if (Math.abs(zPos) > 40) {
       this.populateChunkContent(zPos, chunkIndex);
     }
   }
@@ -1370,6 +1467,10 @@ export class SubwayRickshawEngine {
     cat.position.set(laneX, ROAD_Y, zPos);
     cat.userData.level = 0;
     cat.userData.expectedBaseY = ROAD_Y;
+    cat.userData.isCat = true;
+    cat.userData.crossDir = Math.random() < 0.5 ? -1 : 1;
+    cat.userData.crossSpeed = 2.0 + Math.random() * 1.5;
+    cat.rotation.y = cat.userData.crossDir > 0 ? Math.PI / 2 : -Math.PI / 2;
     this.scene.add(cat);
     this.activePedestrians.push(cat);
   }
@@ -1379,6 +1480,10 @@ export class SubwayRickshawEngine {
     ped.position.set(laneX, ROAD_Y, zPos);
     ped.userData.level = 0;
     ped.userData.expectedBaseY = ROAD_Y;
+    ped.userData.isCrossingPed = true;
+    ped.userData.crossDir = Math.random() < 0.5 ? -1 : 1;
+    ped.userData.crossSpeed = 1.2 + Math.random() * 1.0;
+    ped.rotation.y = ped.userData.crossDir > 0 ? Math.PI / 2 : -Math.PI / 2;
     this.scene.add(ped);
     this.activePedestrians.push(ped);
   }
@@ -1911,20 +2016,29 @@ export class SubwayRickshawEngine {
     this.activeCoins = [];
 
     this.activeObstacles.forEach((o) => {
-      if (o.userData?.type === 'FLYOVER_STRUCTURE') {
-        this.disposeFlyoverGroup(o);
-      }
+      this.disposeObjectHierarchy(o);
       this.scene.remove(o);
     });
     this.activeObstacles = [];
 
     this.activePedestrians.forEach((p) => {
-      if (!p.parent || p.parent === this.scene) this.scene.remove(p);
+      if (!p.parent || p.parent === this.scene) {
+        this.disposeObjectHierarchy(p);
+        this.scene.remove(p);
+      }
     });
     this.activePedestrians = [];
 
-    this.activePowerups.forEach((p) => this.scene.remove(p));
+    this.activePowerups.forEach((p) => {
+      this.disposeObjectHierarchy(p);
+      this.scene.remove(p);
+    });
     this.activePowerups = [];
+
+    this.activePuddles = [];
+    this.puffPool.forEach((p) => (p.visible = false));
+    this.sparklePool.forEach((s) => (s.visible = false));
+    this.particles = [];
 
     this.roadChunks.forEach((ch) => this.scene.remove(ch));
     this.roadChunks = [];
@@ -1938,13 +2052,26 @@ export class SubwayRickshawEngine {
     this.notifyStats();
   }
 
-  private disposeFlyoverGroup(flyoverGroup: THREE.Object3D) {
-    flyoverGroup.traverse((child) => {
+  private disposeObjectHierarchy(obj: THREE.Object3D) {
+    obj.traverse((child) => {
       const mesh = child as THREE.Mesh;
-      if (mesh.isMesh && mesh.geometry) {
-        mesh.geometry.dispose();
+      if (mesh.isMesh || (mesh as any).isPoints || (mesh as any).isLine) {
+        if (mesh.geometry) {
+          mesh.geometry.dispose();
+        }
+        if (mesh.material) {
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else {
+            mesh.material.dispose();
+          }
+        }
       }
     });
+  }
+
+  private disposeFlyoverGroup(flyoverGroup: THREE.Object3D) {
+    this.disposeObjectHierarchy(flyoverGroup);
   }
 
   public handleStumble(reason: string, hitObstacle?: THREE.Object3D) {
@@ -2103,9 +2230,11 @@ export class SubwayRickshawEngine {
       return;
     }
 
-    // 1. Fixed Timestep Physics (60 Hz)
+    // 1. Fixed Timestep Physics (60 Hz) with spiral of death prevention
     this.accumulator += rawDelta;
-    while (this.accumulator >= this.fixedDt) {
+    let physSteps = 0;
+    const maxSubSteps = 3;
+    while (this.accumulator >= this.fixedDt && physSteps < maxSubSteps) {
       if (this.state === 'RUNNING') {
         this.stepPhysics(this.fixedDt);
       } else if (this.state === 'GAMEOVER' && this.policeChase && this.policeChase.arrest.active) {
@@ -2124,6 +2253,10 @@ export class SubwayRickshawEngine {
         }
       }
       this.accumulator -= this.fixedDt;
+      physSteps++;
+    }
+    if (this.accumulator > this.fixedDt) {
+      this.accumulator = 0; // Drop surplus accumulator to prevent death spiral
     }
 
     // 2. Visual & Environment Updates
@@ -2237,18 +2370,18 @@ export class SubwayRickshawEngine {
       this.notifyStats();
     }
 
-    // 4. Adaptive Quality: monitor average frame time over 60 frames
-    const frameDuration = performance.now() - frameStart;
-    this.frameTimes.push(frameDuration);
+    // 4. Adaptive Quality: monitor actual frame-to-frame delta time (ms)
+    const frameDeltaMs = rawDelta * 1000;
+    this.frameTimes.push(frameDeltaMs);
     if (this.frameTimes.length >= 60) {
       const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
       this.frameTimes.length = 0;
-      if (avg > 20) {
+      if (avg > 25) {
         this.goodFrameCount = 0;
         this.downgradeQuality();
-      } else if (avg < 14) {
+      } else if (avg < 18) {
         this.goodFrameCount++;
-        if (this.goodFrameCount >= 3) {
+        if (this.goodFrameCount >= 4) {
           this.upgradeQuality();
           this.goodFrameCount = 0;
         }
@@ -2276,10 +2409,11 @@ export class SubwayRickshawEngine {
   }
 
   private downgradeQuality() {
-    if (this.currentQualityScale > 0.75) {
-      this.currentQualityScale = Math.max(0.75, this.currentQualityScale - 0.25);
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * this.currentQualityScale);
-      if (this.currentQualityScale <= 0.75) {
+    if (this.currentQualityScale > 0.6) {
+      this.currentQualityScale = Math.max(0.6, this.currentQualityScale - 0.2);
+      const baseDpr = Math.min(window.devicePixelRatio, 1.5);
+      this.renderer.setPixelRatio(baseDpr * this.currentQualityScale);
+      if (this.currentQualityScale <= 0.7) {
         this.adaptiveTier = 'LOW';
         if (this.rainMesh) this.rainMesh.visible = false;
       } else {
@@ -2290,8 +2424,9 @@ export class SubwayRickshawEngine {
 
   private upgradeQuality() {
     if (this.currentQualityScale < 1.0) {
-      this.currentQualityScale = Math.min(1.0, this.currentQualityScale + 0.25);
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * this.currentQualityScale);
+      this.currentQualityScale = Math.min(1.0, this.currentQualityScale + 0.2);
+      const baseDpr = Math.min(window.devicePixelRatio, 1.5);
+      this.renderer.setPixelRatio(baseDpr * this.currentQualityScale);
       if (this.currentQualityScale >= 1.0) {
         this.adaptiveTier = 'HIGH';
       } else {
@@ -2745,9 +2880,9 @@ export class SubwayRickshawEngine {
           }
         }
 
-        // Upward green sparkles during boosted jumps
+        // Upward sparkles during boosted jumps (pooled zero allocation)
         if (this.jumpVariant !== null && this.verticalVelocity > 1.0 && Math.random() < 0.35) {
-          this.spawnPickupBurst(this.rickshaw.position, 0x22c55e, 2);
+          this.spawnCoinSparkle(this.rickshaw.position);
         }
 
         if (this.jumpOffset <= 0) {
@@ -2883,15 +3018,37 @@ export class SubwayRickshawEngine {
 
     const curPZ = this.rickshaw.position.z;
 
-    // Living World: Pedestrians walking animation
-    this.activePedestrians.forEach((ped) => {
+    // Living World: Pedestrians walking animation, crossing motion & despawn
+    for (let pIdx = this.activePedestrians.length - 1; pIdx >= 0; pIdx--) {
+      const ped = this.activePedestrians[pIdx];
+
+      // Despawn crossing pedestrians / cats when passed behind camera
+      if (ped.userData.isCat || ped.userData.isCrossingPed) {
+        if (ped.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
+          this.disposeObjectHierarchy(ped);
+          this.scene.remove(ped);
+          this.activePedestrians.splice(pIdx, 1);
+          continue;
+        }
+
+        // Lateral crossing movement
+        if (ped.userData.crossSpeed) {
+          const crossDir = ped.userData.crossDir || 1;
+          ped.position.x += crossDir * ped.userData.crossSpeed * delta;
+          if (Math.abs(ped.position.x) > 5.5) {
+            ped.userData.crossDir = -crossDir;
+            ped.rotation.y = ped.userData.crossDir > 0 ? Math.PI / 2 : -Math.PI / 2;
+          }
+        }
+      }
+
       ped.userData.walkPhase += delta * 6;
       const swing = Math.sin(ped.userData.walkPhase) * 0.45;
       if (ped.userData.leftLeg && ped.userData.rightLeg) {
         ped.userData.leftLeg.rotation.x = swing;
         ped.userData.rightLeg.rotation.x = -swing;
       }
-    });
+    }
 
     // Living Intelligent Traffic: PID Longitudinal Following Controller + Turn Blinkers & Lane Changing (Level-Aware!)
     for (let i = this.activeAITraffic.length - 1; i >= 0; i--) {
@@ -3188,17 +3345,39 @@ export class SubwayRickshawEngine {
     // Update active bus ramps for groundHeightAt()
     setBusRamps(this.activeObstacles);
 
-    // Chunk Recycling (advances integer nextChunkIndex so distance-based flyover & pattern spawning stays accurate!)
-    this.roadChunks.forEach((chunk) => {
+    // Chunk Recycling: Continuous Conveyer Belt Loop (Infinite road & cityscape)
+    for (let c = 0; c < this.roadChunks.length; c++) {
+      const chunk = this.roadChunks[c];
       if (chunk.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
-        const recycledIdx = this.nextChunkIndex++;
-        const zPos = -recycledIdx * GAME_CONFIG.CHUNK_LENGTH - this.originZOffset;
+        // Find the furthest chunk currently ahead of the player (minimum Z)
+        let minChunkZ = this.roadChunks[0].position.z;
+        for (let j = 1; j < this.roadChunks.length; j++) {
+          if (this.roadChunks[j].position.z < minChunkZ) {
+            minChunkZ = this.roadChunks[j].position.z;
+          }
+        }
+        const zPos = minChunkZ - GAME_CONFIG.CHUNK_LENGTH;
         chunk.position.z = zPos;
+        const recycledIdx = this.nextChunkIndex++;
         chunk.userData.chunkIndex = recycledIdx;
-        this.nextSpawnZ = -(this.nextChunkIndex) * GAME_CONFIG.CHUNK_LENGTH - this.originZOffset;
+        this.nextSpawnZ = zPos - GAME_CONFIG.CHUNK_LENGTH;
+
+        // Reset splash status for puddles on recycled chunk
+        for (let p = 0; p < this.activePuddles.length; p++) {
+          if (this.activePuddles[p].chunk === chunk) {
+            this.activePuddles[p].puddle.userData.splashedThisPass = false;
+          }
+        }
+
+        // Safeguard arch visibility when overlapping elevated flyovers
+        const archChild = chunk.children.find((child) => child.userData.propCategory === 'ARCH');
+        if (archChild) {
+          archChild.visible = !getFlyoverSpanAtZ(zPos);
+        }
+
         this.populateChunkContent(zPos, recycledIdx);
       }
-    });
+    }
 
     // Obstacles & Level-Filtered Collision Check
     this.electricTowerNearby = false;
@@ -3219,6 +3398,7 @@ export class SubwayRickshawEngine {
       }
 
       if (obs.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
+        this.disposeObjectHierarchy(obs);
         this.scene.remove(obs);
         this.activeObstacles.splice(i, 1);
         continue;
@@ -3369,18 +3549,17 @@ export class SubwayRickshawEngine {
       }
     }
 
-    // Puddle Splash Check (only on ground road level 0)
+    // Puddle Splash Check (only on ground road level 0) - O(1) direct pool lookup
     if (this.verticalLevel === 0 && this.jumpOffset < 0.25) {
-      for (const ch of this.roadChunks) {
-        for (const child of ch.children) {
-          if (child.userData.isPuddle && !child.userData.splashedThisPass) {
-            const worldPuddleZ = ch.position.z + child.position.z;
-            const worldPuddleX = child.position.x;
-            if (Math.abs(curPZ - worldPuddleZ) < 2.0 && Math.abs(this.playerX - worldPuddleX) < 1.4) {
-              child.userData.splashedThisPass = true;
-              this.sound.playWaterSplash();
-              if (this.onPuddleSplash) this.onPuddleSplash();
-            }
+      for (let p = 0; p < this.activePuddles.length; p++) {
+        const item = this.activePuddles[p];
+        if (!item.puddle.userData.splashedThisPass) {
+          const worldPuddleZ = item.chunk.position.z + item.puddle.position.z;
+          const worldPuddleX = item.puddle.position.x;
+          if (Math.abs(curPZ - worldPuddleZ) < 2.0 && Math.abs(this.playerX - worldPuddleX) < 1.4) {
+            item.puddle.userData.splashedThisPass = true;
+            this.sound.playWaterSplash();
+            if (this.onPuddleSplash) this.onPuddleSplash();
           }
         }
       }
@@ -3439,6 +3618,7 @@ export class SubwayRickshawEngine {
       pUp.rotation.y += delta * 3;
 
       if (pUp.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
+        this.disposeObjectHierarchy(pUp);
         this.scene.remove(pUp);
         this.activePowerups.splice(i, 1);
         continue;
@@ -3452,6 +3632,7 @@ export class SubwayRickshawEngine {
         } else {
           this.activatePowerupItem(pUp.userData.type as PowerupType);
         }
+        this.disposeObjectHierarchy(pUp);
         this.scene.remove(pUp);
         this.activePowerups.splice(i, 1);
       }
@@ -3563,23 +3744,41 @@ export class SubwayRickshawEngine {
   }
 
   private spawnExhaustPuff(pos: THREE.Vector3) {
-    const geo = new THREE.SphereGeometry(0.12, 6, 6);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.5 });
-    const puff = new THREE.Mesh(geo, mat);
+    let puff: THREE.Mesh | null = null;
+    for (let i = 0; i < this.puffPool.length; i++) {
+      if (!this.puffPool[i].visible) {
+        puff = this.puffPool[i];
+        break;
+      }
+    }
+    if (!puff) return; // Pool exhausted, skip to safeguard 60 FPS
     puff.position.copy(pos);
-    this.scene.add(puff);
+    puff.scale.set(1, 1, 1);
+    (puff.material as THREE.MeshBasicMaterial).opacity = 0.5;
+    puff.visible = true;
     this.particles.push({ mesh: puff, life: 0.45, maxLife: 0.45 });
   }
 
   private spawnCoinSparkle(pos: THREE.Vector3) {
-    const geo = new THREE.SphereGeometry(0.14, 6, 6);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.8 });
-    for (let i = 0; i < 4; i++) {
-      const sparkle = new THREE.Mesh(geo, mat);
-      sparkle.position.copy(pos);
-      this.scene.add(sparkle);
-      const vel = new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 3 + 1, (Math.random() - 0.5) * 3);
-      this.particles.push({ mesh: sparkle, vel: vel, life: 0.35, maxLife: 0.35 });
+    let spawned = 0;
+    for (let i = 0; i < this.sparklePool.length && spawned < 4; i++) {
+      const sparkle = this.sparklePool[i];
+      if (!sparkle.visible) {
+        sparkle.position.copy(pos);
+        sparkle.scale.set(1, 1, 1);
+        (sparkle.material as THREE.MeshBasicMaterial).opacity = 0.8;
+        sparkle.visible = true;
+        if (!sparkle.userData.vel) {
+          sparkle.userData.vel = new THREE.Vector3();
+        }
+        sparkle.userData.vel.set(
+          (Math.random() - 0.5) * 3,
+          Math.random() * 3 + 1,
+          (Math.random() - 0.5) * 3
+        );
+        this.particles.push({ mesh: sparkle, vel: sparkle.userData.vel, life: 0.35, maxLife: 0.35 });
+        spawned++;
+      }
     }
   }
 
@@ -3589,21 +3788,38 @@ export class SubwayRickshawEngine {
       p.life -= delta;
 
       if (p.life <= 0) {
-        if (p.mesh) this.scene.remove(p.mesh);
-        if (p.points) this.scene.remove(p.points);
+        if (p.mesh) {
+          p.mesh.visible = false;
+        }
+        if (p.points) {
+          if (p.points.geometry) {
+            p.points.geometry.dispose();
+          }
+          if (p.points.material) {
+            if (Array.isArray(p.points.material)) {
+              p.points.material.forEach((m) => m.dispose());
+            } else {
+              p.points.material.dispose();
+            }
+          }
+          this.scene.remove(p.points);
+        }
         this.particles.splice(i, 1);
         continue;
       }
 
       if (p.mesh) {
         p.mesh.scale.multiplyScalar(1.0 + delta * 2.5);
-        (p.mesh.material as THREE.MeshBasicMaterial).opacity = p.life / p.maxLife;
+        const mat = p.mesh.material as THREE.MeshBasicMaterial;
+        if (mat && mat.opacity !== undefined) {
+          mat.opacity = Math.max(0, p.life / p.maxLife);
+        }
         if (p.vel) {
           p.mesh.position.addScaledVector(p.vel, delta);
         }
       }
       if (p.points) {
-        (p.points.material as THREE.PointsMaterial).opacity = p.life;
+        (p.points.material as THREE.PointsMaterial).opacity = Math.max(0, p.life);
         const pos = p.points.geometry.attributes.position.array as Float32Array;
         for (let j = 0; j < p.vels!.length; j++) {
           pos[j * 3] += p.vels![j].x * delta;

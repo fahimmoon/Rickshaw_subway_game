@@ -49,14 +49,14 @@ export const GAME_CONFIG = {
   GRAVITY: 36.0,                             // Platformer gravity
   ROAD_WIDTH: 14.0,                          // 3-lane road width (m)
   CHUNK_LENGTH: 50.0,                        // Length of each road chunk
-  ACTIVE_CHUNKS: 12,                         // Active road chunks in memory (600m total track)
-  CHUNKS_AHEAD_MIN: 8,                       // Guarantee at least 8 chunks (400m) ahead of player (exceeds 320m fog)
+  ACTIVE_CHUNKS: 10,                         // Active road chunks in memory (500m total track)
+  CHUNKS_AHEAD_MIN: 7,                       // Guarantee at least 7 chunks (350m) ahead of player
   CHUNK_GENERATION_MAX_PER_FRAME: 4,         // Max chunks to spawn/recycle per frame to prevent frame spikes
   DESPAWN_DISTANCE: 40.0,                    // Distance behind camera before recycling
-  FLOATING_ORIGIN_THRESHOLD: 1000.0,         // Subtract Z offset when distance passes threshold
+  FLOATING_ORIGIN_THRESHOLD: 25000.0,        // Shift origin only after 25km (prevents premature coordinate shifting)
   FOG_COLOR: 0x7dd3fc,                       // Bright sunny blue horizon fog
-  FOG_NEAR: 120,                             // Soft fog start
-  FOG_FAR: 320,                              // Horizon fog end
+  FOG_NEAR: 140,                             // Soft fog start
+  FOG_FAR: 380,                              // Horizon fog end (fully masked within 500m track)
   // Police Chase Tuning
   POLICE_GAP_SAFE: 14.0,                     // Safe distance behind rickshaw
   POLICE_GAP_CLOSE: 5.0,                     // Danger gap after stumble/scrape

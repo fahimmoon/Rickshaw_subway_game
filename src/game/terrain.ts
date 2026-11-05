@@ -148,17 +148,29 @@ export function shiftTerrainOrigin(zOffset: number): void {
 }
 
 export function setBusRamps(busObstacles: readonly { position: { x: number; z: number }; userData: Record<string, unknown> }[]): void {
-  _activeBusRamps.length = 0;
+  let count = 0;
   for (let i = 0; i < busObstacles.length; i++) {
     const obs = busObstacles[i];
     if (obs.userData.type === 'BUS_RAMP' && (obs.userData.level ?? 0) === 0) {
-      _activeBusRamps.push({
-        laneX: (obs.userData.laneX as number) ?? obs.position.x,
-        zCenter: obs.position.z,
-        roofHeight: (obs.userData.roofHeight as number) ?? 2.8
-      });
+      const lx = (obs.userData.laneX as number) ?? obs.position.x;
+      const zc = obs.position.z;
+      const rh = (obs.userData.roofHeight as number) ?? 2.8;
+      if (count < _activeBusRamps.length) {
+        const item = _activeBusRamps[count];
+        item.laneX = lx;
+        item.zCenter = zc;
+        item.roofHeight = rh;
+      } else {
+        _activeBusRamps.push({
+          laneX: lx,
+          zCenter: zc,
+          roofHeight: rh
+        });
+      }
+      count++;
     }
   }
+  _activeBusRamps.length = count;
 }
 
 /**

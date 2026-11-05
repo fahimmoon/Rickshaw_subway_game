@@ -1681,17 +1681,25 @@ export function createPedestrian(shirtColor = 0x0284c7): THREE.Group {
   return normalizeModelBase(group, true, 0.75, 0.75);
 }
 
-// 8. Roadside Puddles with Sky & Light Sheen
+// 8. Roadside Puddles with Sky & Light Sheen (Shared geometry & material)
+let _sharedPuddleGeo: THREE.PlaneGeometry | null = null;
+let _sharedPuddleMat: THREE.Material | null = null;
+
 export function createPuddle(radiusX = 1.2, radiusZ = 2.0): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(radiusX * 2, radiusZ * 2);
-  const mat = createGameMaterial({
-    map: TextureCache.getPuddleSheen(),
-    transparent: true,
-    opacity: 0.85,
-    roughness: 0.05,
-    metalness: 0.3
-  });
-  const mesh = new THREE.Mesh(geo, mat);
+  if (!_sharedPuddleGeo) {
+    _sharedPuddleGeo = new THREE.PlaneGeometry(1, 1);
+  }
+  if (!_sharedPuddleMat) {
+    _sharedPuddleMat = createGameMaterial({
+      map: TextureCache.getPuddleSheen(),
+      transparent: true,
+      opacity: 0.85,
+      roughness: 0.05,
+      metalness: 0.3
+    });
+  }
+  const mesh = new THREE.Mesh(_sharedPuddleGeo, _sharedPuddleMat);
+  mesh.scale.set(radiusX * 2, radiusZ * 2, 1);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = 0.022;
   mesh.frustumCulled = false;
@@ -1820,6 +1828,7 @@ export function createCityBuilding(styleIdx = 0): THREE.Group {
     if (g.attributes.uv) g.deleteAttribute('uv');
   }
   const mergedTrimGeo = mergeGeometries(trimGeos, false);
+  trimGeos.forEach((g) => g.dispose());
   const trimMat = createGameMaterial({ color: 0xe2e8f0, metalness: 0.45, roughness: 0.5 });
   const mergedTrimMesh = new THREE.Mesh(mergedTrimGeo, trimMat);
   mergedTrimMesh.frustumCulled = false;
@@ -1974,33 +1983,44 @@ export function createCNGCylinderPickup(): THREE.Group {
   return group;
 }
 
-// 10. Palm Tree (Normalized so trunk base sits on y = 0)
+// 10. Palm Tree (Pre-merged shared trunk + planter and 7-leaf geometries)
+let _sharedPalmTrunkGeo: THREE.BufferGeometry | null = null;
+let _sharedPalmLeavesGeo: THREE.BufferGeometry | null = null;
+let _sharedPalmTrunkMat: THREE.Material | null = null;
+let _sharedPalmLeafMat: THREE.Material | null = null;
+
 export function createPalmTree(): THREE.Group {
-  const group = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18, 0.28, 5.8, 8),
-    createGameMaterial({ color: 0x78350f, roughness: 0.9 })
-  );
-  trunk.position.y = 2.9;
-  group.add(trunk);
-
-  // Planter base collar at y = 0
-  const planter = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.48, 0.52, 0.32, 8),
-    createGameMaterial({ color: 0x475569, roughness: 0.85 })
-  );
-  planter.position.y = 0.16;
-  group.add(planter);
-
-  const leafMat = createGameMaterial({ color: 0x16a34a, roughness: 0.4, side: THREE.DoubleSide });
-  for (let i = 0; i < 7; i++) {
-    const angle = (i / 7) * Math.PI * 2;
-    const leaf = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 3.0), leafMat);
-    leaf.position.set(Math.cos(angle) * 1.3, 5.6, Math.sin(angle) * 1.3);
-    leaf.rotation.y = angle;
-    leaf.rotation.x = 0.55;
-    group.add(leaf);
+  if (!_sharedPalmTrunkGeo) {
+    const trunkPart = new THREE.CylinderGeometry(0.18, 0.28, 5.8, 8);
+    trunkPart.translate(0, 2.9, 0);
+    const planterPart = new THREE.CylinderGeometry(0.48, 0.52, 0.32, 8);
+    planterPart.translate(0, 0.16, 0);
+    _sharedPalmTrunkGeo = mergeGeometries([trunkPart, planterPart], false);
+    trunkPart.dispose();
+    planterPart.dispose();
+    _sharedPalmTrunkMat = createGameMaterial({ color: 0x78350f, roughness: 0.9 });
   }
+
+  if (!_sharedPalmLeavesGeo) {
+    const leafParts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 7; i++) {
+      const angle = (i / 7) * Math.PI * 2;
+      const leafPart = new THREE.PlaneGeometry(1.2, 3.0);
+      leafPart.rotateX(0.55);
+      leafPart.rotateY(angle);
+      leafPart.translate(Math.cos(angle) * 1.3, 5.6, Math.sin(angle) * 1.3);
+      leafParts.push(leafPart);
+    }
+    _sharedPalmLeavesGeo = mergeGeometries(leafParts, false);
+    leafParts.forEach((g) => g.dispose());
+    _sharedPalmLeafMat = createGameMaterial({ color: 0x16a34a, roughness: 0.4, side: THREE.DoubleSide });
+  }
+
+  const group = new THREE.Group();
+  const trunk = new THREE.Mesh(_sharedPalmTrunkGeo, _sharedPalmTrunkMat);
+  const leaves = new THREE.Mesh(_sharedPalmLeavesGeo, _sharedPalmLeafMat);
+  group.add(trunk);
+  group.add(leaves);
   return normalizeModelBase(group, true, 1.4, 1.4);
 }
 
