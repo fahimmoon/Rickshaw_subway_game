@@ -1006,9 +1006,9 @@ export function createRoadHurdle(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'Prop_hurdle';
 
-  const orangeMat = createGameMaterial({ color: 0xf97316, flatShading: true, roughness: 0.4 });
-  const whiteMat = createGameMaterial({ color: 0xf8fafc, flatShading: true, roughness: 0.4 });
-  const darkMat = createGameMaterial({ color: 0x1e293b, flatShading: true, roughness: 0.8 });
+  const orangeMat = createGameMaterial({ color: 0xf97316, flatShading: false, roughness: 0.4 });
+  const whiteMat = createGameMaterial({ color: 0xf8fafc, flatShading: false, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  const darkMat = createGameMaterial({ color: 0x1e293b, flatShading: false, roughness: 0.8 });
 
   // Symmetrical base feet at y = 0 spanning exact L = 0.6m
   for (const sx of [-1, 1]) {
@@ -1194,6 +1194,10 @@ export function createPuddle(radiusX = 1.2, radiusZ = 2.0): THREE.Mesh {
       map: TextureCache.getPuddleSheen(),
       transparent: true,
       opacity: 0.85,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2,
       roughness: 0.05,
       metalness: 0.3
     });

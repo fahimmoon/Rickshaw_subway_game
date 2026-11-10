@@ -57,13 +57,10 @@ export class TextureCache {
       ctx.stroke();
     }
 
-    // Roadside Oil / Diesel stains
-    ctx.fillStyle = 'rgba(10, 15, 20, 0.4)';
-    for (let p = 0; p < 4; p++) {
-      ctx.beginPath();
-      ctx.arc(80 + Math.random() * 350, 80 + Math.random() * 350, 18 + Math.random() * 25, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Subtle longitudinal tire wear bands (no circular spots that look like fake shadows)
+    ctx.fillStyle = 'rgba(15, 20, 28, 0.16)';
+    ctx.fillRect(96, 0, 48, 512);
+    ctx.fillRect(368, 0, 48, 512);
 
     const map = new THREE.CanvasTexture(canvas);
     map.wrapS = THREE.RepeatWrapping;

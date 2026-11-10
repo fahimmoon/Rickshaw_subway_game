@@ -408,7 +408,10 @@ export class PickupSystemManager {
       transparent: true,
       opacity: 0.7,
       side: THREE.DoubleSide,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2
     });
     this.glowRingMesh = new THREE.InstancedMesh(ringGeo, ringMat, POOL_SIZE);
     this.glowRingMesh.count = 0;
@@ -424,7 +427,10 @@ export class PickupSystemManager {
       color: 0x000000,
       transparent: true,
       opacity: 0.42,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2
     });
     this.shadowMesh = new THREE.InstancedMesh(shadowGeo, shadowMat, POOL_SIZE);
     this.shadowMesh.count = 0;

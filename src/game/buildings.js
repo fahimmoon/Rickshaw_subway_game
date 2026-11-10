@@ -146,11 +146,14 @@ function freezeStaticBuildingMeshes(group) {
 
 const _matCache = new Map();
 function getLambert(hex, extra = {}) {
-  const key = `${hex}_${ extra.emissive || 0 }_${ extra.opacity || 1 }_${ extra.side || 0 }`;
+  const key = `${hex}_${ extra.emissive || 0 }_${ extra.opacity || 1 }_${ extra.side || 0 }_${ extra.polygonOffset ? 1 : 0 }`;
   if (!_matCache.has(key)) {
     const mat = new THREE.MeshLambertMaterial({
       color: hex,
-      flatShading: true,
+      flatShading: false,
+      polygonOffset: Boolean(extra.polygonOffset),
+      polygonOffsetFactor: extra.polygonOffset ? -1 : 0,
+      polygonOffsetUnits: extra.polygonOffset ? -2 : 0,
       ...extra
     });
     patchObjectHierarchy(new THREE.Mesh(SHARED_GEO.box, mat));
@@ -161,16 +164,16 @@ function getLambert(hex, extra = {}) {
 
 // Shared Night-Reactive Emissive Materials (toggled globally in O(1) by setNight)
 const NIGHT_MATERIALS = {
-  windowLitWarm: new THREE.MeshBasicMaterial({ color: 0x94a3b8 }),
-  windowLitCool: new THREE.MeshBasicMaterial({ color: 0x64748b }),
-  windowDark: getLambert(0x1e293b),
+  windowLitWarm: new THREE.MeshBasicMaterial({ color: 0x94a3b8, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
+  windowLitCool: new THREE.MeshBasicMaterial({ color: 0x64748b, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
+  windowDark: getLambert(0x1e293b, { polygonOffset: true }),
   minaretCrescent: new THREE.MeshBasicMaterial({ color: 0x10b981 }),
-  hospitalCross: new THREE.MeshBasicMaterial({ color: 0xef4444 }),
-  weddingLedPink: new THREE.MeshBasicMaterial({ color: 0xec4899 }),
-  weddingLedCyan: new THREE.MeshBasicMaterial({ color: 0x06b6d4 }),
-  weddingLedGold: new THREE.MeshBasicMaterial({ color: 0xfacc15 }),
+  hospitalCross: new THREE.MeshBasicMaterial({ color: 0xef4444, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
+  weddingLedPink: new THREE.MeshBasicMaterial({ color: 0xec4899, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
+  weddingLedCyan: new THREE.MeshBasicMaterial({ color: 0x06b6d4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
+  weddingLedGold: new THREE.MeshBasicMaterial({ color: 0xfacc15, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),
   lanternGlow: new THREE.MeshBasicMaterial({ color: 0xd97706 }),
-  petrolCanopyEdge: new THREE.MeshBasicMaterial({ color: 0x22c55e })
+  petrolCanopyEdge: new THREE.MeshBasicMaterial({ color: 0x22c55e, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 })
 };
 
 // Pre-patch night materials for world curve shader
@@ -226,7 +229,7 @@ function getWeatheredFacadeTexture(hexColor) {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshLambertMaterial({ map: tex, flatShading: true });
+  const mat = new THREE.MeshLambertMaterial({ map: tex, flatShading: false });
   patchObjectHierarchy(new THREE.Mesh(SHARED_GEO.box, mat));
   _texCache.set(key, mat);
   return mat;
@@ -261,7 +264,7 @@ function getSignBannerMaterial(keyId, cfg) {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   patchObjectHierarchy(new THREE.Mesh(SHARED_GEO.plane, mat));
   _texCache.set(keyId, mat);
   return mat;
@@ -310,7 +313,7 @@ function getClockFaceMaterial() {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   patchObjectHierarchy(new THREE.Mesh(SHARED_GEO.plane, mat));
   _texCache.set(key, mat);
   return mat;

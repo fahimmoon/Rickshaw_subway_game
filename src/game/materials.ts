@@ -42,8 +42,9 @@ export function createGameMaterial(
   const emissiveKey = rest.emissive !== undefined ? new THREE.Color(rest.emissive).getHexString() : '000000';
   const emIntensity = rest.emissiveIntensity ?? 0;
   const opacityKey = rest.transparent ? (rest.opacity ?? 1).toFixed(2) : 'opaque';
+  const polyOffsetKey = rest.polygonOffset ? `po_${rest.polygonOffsetFactor ?? -1}_${rest.polygonOffsetUnits ?? -1}` : 'nopo';
   const cacheKey = !hasUniqueMap
-    ? `${kind}_${colorKey}_${emissiveKey}_${emIntensity}_${opacityKey}_${Boolean(rest.wireframe)}_${Boolean(rest.vertexColors)}_${curveMultiplier}`
+    ? `${kind}_${colorKey}_${emissiveKey}_${emIntensity}_${opacityKey}_${Boolean(rest.wireframe)}_${Boolean(rest.vertexColors)}_${polyOffsetKey}_${curveMultiplier}`
     : '';
 
   if (cacheKey && _sharedMaterialPalette.has(cacheKey)) {
@@ -68,7 +69,8 @@ export function createGameMaterial(
     case 'physical':
     case 'standard':
     default: {
-      // Stage 2 Optimization: Prefer fast flat-shaded MeshLambertMaterial over expensive PBR MeshStandardMaterial
+      // Stage 2 Optimization: Use MeshLambertMaterial with analytical vertex normals (flatShading: false)
+      // so curved-world vertex displacement never causes dFdx/dFdy fragment-derivative shading jitter.
       const lambertParams: THREE.MeshLambertMaterialParameters = {
         color: rest.color,
         map: rest.map,
@@ -80,7 +82,10 @@ export function createGameMaterial(
         vertexColors: Boolean(rest.vertexColors),
         side: rest.side ?? THREE.FrontSide,
         depthWrite: rest.depthWrite ?? true,
-        flatShading: true
+        polygonOffset: Boolean(rest.polygonOffset),
+        polygonOffsetFactor: rest.polygonOffsetFactor ?? 0,
+        polygonOffsetUnits: rest.polygonOffsetUnits ?? 0,
+        flatShading: false
       };
       mat = new THREE.MeshLambertMaterial(lambertParams);
       break;
@@ -134,15 +139,16 @@ export function createBlobShadow(width: number = 1.8, length: number = 2.4, opac
       map: tex,
       transparent: true,
       opacity,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2
     });
   }
   const mesh = new THREE.Mesh(_sharedShadowGeo, _sharedShadowMat);
   mesh.scale.set(width, 1, length);
   mesh.position.y = 0.02;
   mesh.frustumCulled = true;
-  mesh.matrixAutoUpdate = false;
-  mesh.updateMatrix();
   mesh.name = 'BlobShadow';
   mesh.userData.isBlobShadow = true;
   return mesh;

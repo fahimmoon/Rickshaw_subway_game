@@ -101,11 +101,9 @@ function getGeo(key, factory) {
 function getMat(colorHex, extra = {}) {
   const key = `${colorHex}_${extra.opacity || 1}_${extra.transparent ? 1 : 0}_${extra.emissive || 0}`;
   if (!SHARED_MATS[key]) {
-    SHARED_MATS[key] = new THREE.MeshStandardMaterial({
+    SHARED_MATS[key] = new THREE.MeshLambertMaterial({
       color: colorHex,
-      roughness: 0.78,
-      metalness: 0.08,
-      flatShading: true,
+      flatShading: false,
       ...extra
     });
   }
@@ -118,7 +116,10 @@ function getShadowMat() {
       color: 0x020617,
       transparent: true,
       opacity: 0.34,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2
     });
   }
   return SHARED_MATS['blob_shadow'];

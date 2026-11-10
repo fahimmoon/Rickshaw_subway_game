@@ -220,14 +220,20 @@ function initSharedChunkAssets() {
   }
   _chunkLineMarkingsGeo = mergeGeometries(lineParts, false);
   lineParts.forEach((g) => g.dispose());
-  _chunkLineMat = createGameMaterial({ kind: 'basic', color: 0xf8fafc });
+  _chunkLineMat = createGameMaterial({
+    kind: 'basic',
+    color: 0xf8fafc,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
 
   // Studs
   const studParts: THREE.BufferGeometry[] = [];
   [-dividerX, dividerX].forEach((rx) => {
     for (let rz = -chunkLen / 2 + 1; rz < chunkLen / 2; rz += 8) {
       const stud = new THREE.BoxGeometry(0.14, 0.04, 0.14);
-      stud.translate(rx, ROAD_Y + 0.02, rz);
+      stud.translate(rx, ROAD_Y + 0.022, rz);
       studParts.push(stud);
     }
   });
@@ -245,19 +251,27 @@ function initSharedChunkAssets() {
   });
   _chunkShoulderGeo = mergeGeometries(shoulderParts, false);
   shoulderParts.forEach((g) => g.dispose());
-  _chunkShoulderMat = createGameMaterial({ kind: 'basic', color: 0xfacc15 });
+  _chunkShoulderMat = createGameMaterial({
+    kind: 'basic',
+    color: 0xfacc15,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
 
-  // Alternating Yellow & Black Karachi Traffic Curbs
+  // Alternating Yellow & Black Karachi Traffic Curbs (non-overlapping segments)
   const curbParts: THREE.BufferGeometry[] = [];
   const curbBlackParts: THREE.BufferGeometry[] = [];
   [-1, 1].forEach((side) => {
-    const curb = new THREE.BoxGeometry(0.4, SIDEWALK_Y + 0.05, chunkLen);
-    curb.translate(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, 0);
-    curbParts.push(curb);
+    const curbX = side * (roadW / 2 + 0.2);
+    const curbH = SIDEWALK_Y + 0.05;
+    for (let cz = -chunkLen / 2 + 1; cz < chunkLen / 2; cz += 4) {
+      const yel = new THREE.BoxGeometry(0.4, curbH, 2.0);
+      yel.translate(curbX, curbH * 0.5, cz - 1.0);
+      curbParts.push(yel);
 
-    for (let cz = -chunkLen / 2 + 2; cz < chunkLen / 2; cz += 4) {
-      const blk = new THREE.BoxGeometry(0.42, SIDEWALK_Y + 0.06, 2.0);
-      blk.translate(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, cz);
+      const blk = new THREE.BoxGeometry(0.4, curbH, 2.0);
+      blk.translate(curbX, curbH * 0.5, cz + 1.0);
       curbBlackParts.push(blk);
     }
   });
@@ -792,18 +806,9 @@ export class SubwayRickshawEngine {
     patchObjectHierarchy(this.rickshaw);
     this.scene.add(this.rickshaw);
 
-    // Dedicated Cheap Blob Shadow (flat dark transparent circle) under Player Vehicle
-    const blobGeo = new THREE.CircleGeometry(1.35, 16);
-    blobGeo.rotateX(-Math.PI / 2);
-    const blobMat = createGameMaterial({
-      kind: 'basic',
-      color: 0x090d16,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false
-    });
-    this.playerBlobShadow = new THREE.Mesh(blobGeo, blobMat);
-    this.playerBlobShadow.position.set(0, ROAD_Y + 0.025, 0);
+    // Dedicated Soft Blob Shadow under Player Vehicle (stays anchored on ground/deck when jumping)
+    this.playerBlobShadow = createBlobShadow(1.3, 2.2, 0.42);
+    this.playerBlobShadow.position.set(0, ROAD_Y + 0.02, 0);
     this.scene.add(this.playerBlobShadow);
 
     // Player Shield Bubble (hex/flower energy dome + hit-count rings)
@@ -1209,13 +1214,13 @@ export class SubwayRickshawEngine {
     palmFronds.updateMatrix();
     chunk.add(palmFronds);
 
-    // Multi-Layer Roadside Puddles at exact ROAD_Y (tracked in activePuddles)
+    // Multi-Layer Roadside Puddles elevated slightly above ROAD_Y so they never Z-fight with asphalt
     const numPuddles = 2;
     for (let p = 0; p < numPuddles; p++) {
       const puddle = createPuddle(1.6, 3.2);
       puddle.position.set(
         (p === 0 ? -1 : 1) * 2.6,
-        ROAD_Y,
+        ROAD_Y + 0.022,
         -GAME_CONFIG.CHUNK_LENGTH / 2 + (p + 0.5) * (GAME_CONFIG.CHUNK_LENGTH / numPuddles)
       );
       puddle.matrixAutoUpdate = false;
@@ -3516,9 +3521,11 @@ export class SubwayRickshawEngine {
 
     // Ground/Deck Blob Shadow anchored on current surface
     if (this.playerBlobShadow) {
-      const shadowScale = Math.max(0.28, 1 - this.jumpOffset * 0.13);
-      this.playerBlobShadow.position.set(this.playerX, this.groundY + 0.025, pZ);
-      this.playerBlobShadow.scale.set(shadowScale, 1, shadowScale);
+      const baseW = this.vehicleDef?.hitbox?.width ?? 1.3;
+      const baseL = this.vehicleDef?.hitbox?.length ?? 2.6;
+      const jumpShrink = Math.max(0.28, 1 - this.jumpOffset * 0.13);
+      this.playerBlobShadow.position.set(this.playerX, this.groundY + 0.02, pZ);
+      this.playerBlobShadow.scale.set(baseW * 0.92 * jumpShrink, 1, baseL * 0.92 * jumpShrink);
     }
     if (this.rickshaw.userData.groundShadow) {
       this.rickshaw.userData.groundShadow.visible = false;
@@ -5309,6 +5316,9 @@ export class SubwayRickshawEngine {
 
   public createPlayerVehicleMesh(vehicleId: VehicleId, skinId: RickshawSkin): THREE.Group {
     const vehicle = createPlayableVehicleById(vehicleId, skinId);
+    if (vehicle.userData.groundShadow) {
+      vehicle.userData.groundShadow.visible = false;
+    }
     if (vehicle.userData.debugGroup) {
       vehicle.userData.debugGroup.visible = this.debugBoundingBoxes;
     }

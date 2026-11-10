@@ -230,7 +230,7 @@ function getGeo(key, factory) {
 }
 
 function getMat(colorHex, extra = {}) {
-  const key = `lambert_${colorHex}_${extra.emissive || 0}_${extra.opacity || 1}`;
+  const key = `lambert_${colorHex}_${extra.emissive || 0}_${extra.opacity || 1}_${extra.polygonOffset ? 1 : 0}`;
   if (!MAT_CACHE[key]) {
     MAT_CACHE[key] = new THREE.MeshLambertMaterial({
       color: colorHex,
@@ -239,7 +239,10 @@ function getMat(colorHex, extra = {}) {
       transparent: Boolean(extra.transparent),
       opacity: extra.opacity ?? 1.0,
       depthWrite: extra.depthWrite ?? true,
-      flatShading: true
+      polygonOffset: Boolean(extra.polygonOffset),
+      polygonOffsetFactor: extra.polygonOffset ? -1 : 0,
+      polygonOffsetUnits: extra.polygonOffset ? -2 : 0,
+      flatShading: false
     });
   }
   return MAT_CACHE[key];
@@ -881,9 +884,10 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
   // --------------------------------------------------------------------------
 
   // 1. Concrete Footing / Plinth + Front Step + Drain Ramp Slab
+  const plinthH = 0.20;
   const plinth = new THREE.Mesh(unitBoxGeo, plinthMat);
-  plinth.scale.set(width, 0.20, depth);
-  plinth.position.set(0, 0.10, -depth / 2);
+  plinth.scale.set(width, plinthH, depth);
+  plinth.position.set(0, plinthH / 2, -depth / 2);
   group.add(plinth);
 
   const frontStep = new THREE.Mesh(unitBoxGeo, getMat(0x78716c));
@@ -891,19 +895,21 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
   frontStep.position.set(0, 0.07, 0.24);
   group.add(frontStep);
 
-  // 2. Left & Right Painted Pilasters / Pillars framing the recessed shop bay
+  // 2. Left & Right Painted Pilasters / Pillars framing the recessed shop bay (stacked above plinth)
   const pilasterW = 0.34;
+  const wallAbovePlinthH = groundH - plinthH;
+  const wallAbovePlinthY = plinthH + wallAbovePlinthH / 2;
   [-1, 1].forEach((sx) => {
     const pil = new THREE.Mesh(unitBoxGeo, trimMat);
-    pil.scale.set(pilasterW, groundH, 0.36);
-    pil.position.set(sx * (width / 2 - pilasterW / 2), groundH / 2, -0.12);
+    pil.scale.set(pilasterW, wallAbovePlinthH, 0.36);
+    pil.position.set(sx * (width / 2 - pilasterW / 2), wallAbovePlinthY, -0.12);
     group.add(pil);
   });
 
-  // 3. Recessed Ground-Floor Shop Volume & Back Wall
+  // 3. Recessed Ground-Floor Shop Volume & Back Wall (stacked above plinth, zero coplanar overlap)
   const bodyCore = new THREE.Mesh(unitBoxGeo, wallMat);
-  bodyCore.scale.set(width, groundH, depth - 1.25);
-  bodyCore.position.set(0, groundH / 2, -depth / 2 - 0.62);
+  bodyCore.scale.set(width - 0.01, wallAbovePlinthH, depth - 1.25);
+  bodyCore.position.set(0, wallAbovePlinthY, -depth / 2 - 0.625);
   group.add(bodyCore);
 
   const bayW = width - pilasterW * 2;
@@ -916,15 +922,18 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
         color: 0xfef3c7,
         emissive: 0xf59e0b,
         emissiveIntensity: GLOBAL_IS_NIGHT ? 1.15 : 0.55,
-        flatShading: true
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -2,
+        flatShading: false
       });
       NIGHT_MATERIALS.add(m);
       return m;
     });
 
     const backWall = new THREE.Mesh(unitBoxGeo, interiorGlowMat);
-    backWall.scale.set(bayW, bayH, 0.12);
-    backWall.position.set(0, 0.20 + bayH / 2, -1.20);
+    backWall.scale.set(bayW, bayH, 0.10);
+    backWall.position.set(0, 0.20 + bayH / 2, -1.16);
     group.add(backWall);
 
     // Ceiling Tube Light Strip + Spinning Ceiling Fan inside recessed bay
@@ -948,7 +957,10 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
   const shutterMat = getCachedCustomMat('shop_shutter_mat', () =>
     new THREE.MeshLambertMaterial({
       map: getShutterTexture(),
-      flatShading: true
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2,
+      flatShading: false
     })
   );
   const shutterHousing = new THREE.Mesh(unitBoxGeo, shutterMat);
@@ -971,7 +983,7 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
   const awningMat = getCachedCustomMat(`shop_awning_mat_${awnIdx}`, () =>
     new THREE.MeshLambertMaterial({
       map: getAwningTexture(awnIdx),
-      flatShading: true
+      flatShading: false
     })
   );
   const awningSlope = new THREE.Mesh(unitBoxGeo, awningMat);
@@ -990,7 +1002,10 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
       map: signTex,
       emissive: 0xffffff,
       emissiveMap: signTex,
-      emissiveIntensity: GLOBAL_IS_NIGHT ? 0.65 : 0.12
+      emissiveIntensity: GLOBAL_IS_NIGHT ? 0.65 : 0.12,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2
     });
     NIGHT_MATERIALS.add(m);
     return m;
@@ -998,7 +1013,7 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
 
   const fasciaBoard = new THREE.Mesh(unitBoxGeo, signMat);
   fasciaBoard.scale.set(width * 0.96, 0.82, 0.18);
-  fasciaBoard.position.set(0, 3.32, 0.06);
+  fasciaBoard.position.set(0, 3.32, 0.08);
   group.add(fasciaBoard);
 
   // 7. Projecting Vertical Signboard on a Bracket + Night Neon Strip
@@ -1008,7 +1023,7 @@ export function createShop(type = 'GENERAL_STORE', options = {}) {
       color: catInfo.neonHex,
       emissive: catInfo.neonHex,
       emissiveIntensity: GLOBAL_IS_NIGHT ? 1.45 : 0.35,
-      flatShading: true
+      flatShading: false
     });
     NIGHT_MATERIALS.add(m);
     return m;

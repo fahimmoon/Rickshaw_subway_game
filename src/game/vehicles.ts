@@ -51,15 +51,19 @@ function buildMergedMesh(
     emissiveIntensity?: number;
     roughness?: number;
     metalness?: number;
+    polygonOffset?: boolean;
   }
 ): THREE.Mesh {
   const merged = mergeGeometries(geos, false);
   geos.forEach((g) => g.dispose());
   const mat = createGameMaterial({
     color,
-    flatShading: true,
+    flatShading: false,
     roughness: options?.roughness ?? 0.55,
     metalness: options?.metalness ?? 0.15,
+    ...(options?.polygonOffset
+      ? { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }
+      : {}),
     ...(options?.emissive !== undefined
       ? { emissive: options.emissive, emissiveIntensity: options.emissiveIntensity ?? 0.9 }
       : {})
@@ -225,13 +229,18 @@ export function createCar(color?: number): THREE.Group {
   const headGeos: THREE.BufferGeometry[] = [];
   const tailGeos: THREE.BufferGeometry[] = [];
 
-  // Lower chassis & upper cabin
-  bodyGeos.push(makeBoxGeo(W, lowerH, L, { x: 0, y: chassisBottom + lowerH / 2, z: 0 }));
-  bodyGeos.push(makeBoxGeo(cabinW, cabinH, cabinL, { x: 0, y: lowerTop + cabinH / 2, z: cabinZ }));
-
   // Front & rear bumpers + front grille (flush within W and L)
   const bumperH = 0.14;
   const bumperD = 0.12;
+  const upperChassisH = lowerH - bumperH;
+
+  // Lower chassis split cleanly above/between bumpers so no faces are coplanar with bumpers or lights
+  bodyGeos.push(
+    makeBoxGeo(W - 0.012, bumperH, L - bumperD * 2, { x: 0, y: chassisBottom + bumperH / 2, z: 0 }),
+    makeBoxGeo(W, upperChassisH, L - 0.016, { x: 0, y: chassisBottom + bumperH + upperChassisH / 2, z: 0 }),
+    makeBoxGeo(cabinW, cabinH, cabinL, { x: 0, y: lowerTop + cabinH / 2, z: cabinZ })
+  );
+
   trimGeos.push(
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: -L / 2 + bumperD / 2 }),
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: +L / 2 - bumperD / 2 }),
@@ -242,13 +251,13 @@ export function createCar(color?: number): THREE.Group {
   const winH = cabinH * 0.72;
   const winY = lowerTop + cabinH * 0.52;
   winGeos.push(
-    makeBoxGeo(cabinW * 0.88, winH, 0.04, { x: 0, y: winY, z: cabinZ - cabinL / 2 }),
-    makeBoxGeo(cabinW * 0.86, winH, 0.04, { x: 0, y: winY, z: cabinZ + cabinL / 2 }),
-    makeBoxGeo(cabinW + 0.02, winH, cabinL * 0.40, { x: 0, y: winY, z: cabinZ - cabinL * 0.20 }),
-    makeBoxGeo(cabinW + 0.02, winH, cabinL * 0.38, { x: 0, y: winY, z: cabinZ + cabinL * 0.22 })
+    makeBoxGeo(cabinW * 0.88, winH, 0.04, { x: 0, y: winY, z: cabinZ - cabinL / 2 - 0.008 }),
+    makeBoxGeo(cabinW * 0.86, winH, 0.04, { x: 0, y: winY, z: cabinZ + cabinL / 2 + 0.008 }),
+    makeBoxGeo(cabinW + 0.024, winH, cabinL * 0.40, { x: 0, y: winY, z: cabinZ - cabinL * 0.20 }),
+    makeBoxGeo(cabinW + 0.024, winH, cabinL * 0.38, { x: 0, y: winY, z: cabinZ + cabinL * 0.22 })
   );
 
-  // Symmetrical headlights at front (-Z) and taillights at rear (+Z), flush with body
+  // Symmetrical headlights at front (-Z) and taillights at rear (+Z), flush with outer L
   const lightW = W * 0.18;
   const lightH = 0.13;
   const lightD = 0.04;
@@ -261,10 +270,10 @@ export function createCar(color?: number): THREE.Group {
 
   bodyGroup.add(
     buildMergedMesh(bodyGeos, bodyColor),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
-    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9 }),
-    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85 })
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
+    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9, polygonOffset: true }),
+    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85, polygonOffset: true })
   );
 
   patchObjectHierarchy(root);
@@ -298,13 +307,16 @@ export function createSedan(color?: number): THREE.Group {
   const headGeos: THREE.BufferGeometry[] = [];
   const tailGeos: THREE.BufferGeometry[] = [];
 
+  const bumperH = 0.14;
+  const bumperD = 0.12;
+  const upperChassisH = lowerH - bumperH;
+
   bodyGeos.push(
-    makeBoxGeo(W, lowerH, L, { x: 0, y: chassisBottom + lowerH / 2, z: 0 }),
+    makeBoxGeo(W - 0.012, bumperH, L - bumperD * 2, { x: 0, y: chassisBottom + bumperH / 2, z: 0 }),
+    makeBoxGeo(W, upperChassisH, L - 0.016, { x: 0, y: chassisBottom + bumperH + upperChassisH / 2, z: 0 }),
     makeBoxGeo(cabinW, cabinH, cabinL, { x: 0, y: lowerTop + cabinH / 2, z: cabinZ })
   );
 
-  const bumperH = 0.14;
-  const bumperD = 0.12;
   trimGeos.push(
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: -L / 2 + bumperD / 2 }),
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: +L / 2 - bumperD / 2 }),
@@ -314,10 +326,10 @@ export function createSedan(color?: number): THREE.Group {
   const winH = cabinH * 0.72;
   const winY = lowerTop + cabinH * 0.52;
   winGeos.push(
-    makeBoxGeo(cabinW * 0.88, winH, 0.04, { x: 0, y: winY, z: cabinZ - cabinL / 2 }),
-    makeBoxGeo(cabinW * 0.86, winH, 0.04, { x: 0, y: winY, z: cabinZ + cabinL / 2 }),
-    makeBoxGeo(cabinW + 0.02, winH, cabinL * 0.42, { x: 0, y: winY, z: cabinZ - cabinL * 0.22 }),
-    makeBoxGeo(cabinW + 0.02, winH, cabinL * 0.40, { x: 0, y: winY, z: cabinZ + cabinL * 0.22 })
+    makeBoxGeo(cabinW * 0.88, winH, 0.04, { x: 0, y: winY, z: cabinZ - cabinL / 2 - 0.008 }),
+    makeBoxGeo(cabinW * 0.86, winH, 0.04, { x: 0, y: winY, z: cabinZ + cabinL / 2 + 0.008 }),
+    makeBoxGeo(cabinW + 0.024, winH, cabinL * 0.42, { x: 0, y: winY, z: cabinZ - cabinL * 0.22 }),
+    makeBoxGeo(cabinW + 0.024, winH, cabinL * 0.40, { x: 0, y: winY, z: cabinZ + cabinL * 0.22 })
   );
 
   const lightW = W * 0.19;
@@ -332,10 +344,10 @@ export function createSedan(color?: number): THREE.Group {
 
   bodyGroup.add(
     buildMergedMesh(bodyGeos, bodyColor),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
-    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9 }),
-    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85 })
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
+    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9, polygonOffset: true }),
+    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85, polygonOffset: true })
   );
 
   patchObjectHierarchy(root);
@@ -377,19 +389,27 @@ export function createAmbulance(color?: number): THREE.Group {
   const winGeos: THREE.BufferGeometry[] = [];
   const headGeos: THREE.BufferGeometry[] = [];
 
-  // White body: lower chassis (full L x W) + upper medical box/cab
+  const bumperH = 0.16;
+  const bumperD = 0.12;
+  const stripeH = 0.18;
+  const stripeBottom = chassisBottom + 0.37; // 1.02m
+  const stripeTop = stripeBottom + stripeH;  // 1.20m
+  const midWhiteH = stripeBottom - (chassisBottom + bumperH); // 0.21m
+  const topWhiteH = lowerTop - stripeTop; // 0.05m
+
+  // White body split cleanly around bumpers and red stripe so zero faces overlap
   whiteGeos.push(
-    makeBoxGeo(W, lowerH, L, { x: 0, y: chassisBottom + lowerH / 2, z: 0 }),
-    makeBoxGeo(W * 0.96, vanBoxH, vanBoxL, { x: 0, y: lowerTop + vanBoxH / 2, z: vanBoxZ }),
+    makeBoxGeo(W - 0.012, bumperH, L - bumperD * 2, { x: 0, y: chassisBottom + bumperH / 2, z: 0 }),
+    makeBoxGeo(W - 0.012, midWhiteH, L - 0.016, { x: 0, y: chassisBottom + bumperH + midWhiteH / 2, z: 0 }),
+    makeBoxGeo(W - 0.012, topWhiteH, L - 0.016, { x: 0, y: stripeTop + topWhiteH / 2, z: 0 }),
+    makeBoxGeo(W * 0.96, vanBoxH, vanBoxL - 0.016, { x: 0, y: lowerTop + vanBoxH / 2, z: vanBoxZ - 0.008 }),
     // Siren central white mount on roof centered on X
     makeBoxGeo(W * 0.56, 0.06, 0.28, { x: 0, y: vanBoxTop + 0.03, z: -L * 0.22 })
   );
 
-  // Full-length red stripe running at a constant height (y = 1.12m) along sides & ends
-  const stripeH = 0.18;
-  const stripeY = chassisBottom + 0.46;
+  // Full-length red stripe running at a constant height along sides & ends (exact W x L)
   redGeos.push(
-    makeBoxGeo(W, stripeH, L, { x: 0, y: stripeY, z: 0 })
+    makeBoxGeo(W, stripeH, L, { x: 0, y: stripeBottom + stripeH / 2, z: 0 })
   );
 
   // Red Crosses on left side, right side, and rear doors
@@ -398,13 +418,13 @@ export function createAmbulance(color?: number): THREE.Group {
   const crossY = lowerTop + vanBoxH * 0.52;
   const sideCrossZ = L * 0.14;
   const sideCrossSpanX = W * 0.96 + 0.03;
-  // Side crosses (spanning across X so visible on both -X and +X faces)
+  // Side crosses (vertical bar + horizontal left/right segments so even the two cross arms don't z-fight)
   redGeos.push(
     makeBoxGeo(sideCrossSpanX, crossArmLong, crossArmShort, { x: 0, y: crossY, z: sideCrossZ }),
-    makeBoxGeo(sideCrossSpanX, crossArmShort, crossArmLong, { x: 0, y: crossY, z: sideCrossZ }),
-    // Rear door cross (flush with +Z back face)
+    makeBoxGeo(sideCrossSpanX + 0.004, crossArmShort, crossArmLong, { x: 0, y: crossY, z: sideCrossZ }),
+    // Rear door cross (flush at +L/2, well proud of vanBox back face at +L/2 - 0.016)
     makeBoxGeo(crossArmShort, crossArmLong, 0.04, { x: 0, y: crossY, z: +L / 2 - 0.02 }),
-    makeBoxGeo(crossArmLong, crossArmShort, 0.04, { x: 0, y: crossY, z: +L / 2 - 0.02 })
+    makeBoxGeo(crossArmLong, crossArmShort, 0.044, { x: 0, y: crossY, z: +L / 2 - 0.02 })
   );
 
   // Roof Siren Bars centered on X (top reaches vanBoxTop + sirenTotalH = H = 2.40m exact)
@@ -414,20 +434,18 @@ export function createAmbulance(color?: number): THREE.Group {
   redGeos.push(
     makeBoxGeo(W * 0.24, sirenBarH, 0.24, { x: -W * 0.14, y: sirenBarY, z: sirenZ }),
     // Rear taillights flush at +Z
-    makeBoxGeo(W * 0.16, 0.16, 0.04, { x: -W * 0.36, y: chassisBottom + 0.28, z: +L / 2 - 0.02 }),
-    makeBoxGeo(W * 0.16, 0.16, 0.04, { x: +W * 0.36, y: chassisBottom + 0.28, z: +L / 2 - 0.02 })
+    makeBoxGeo(W * 0.16, 0.16, 0.04, { x: -W * 0.36, y: chassisBottom + 0.26, z: +L / 2 - 0.02 }),
+    makeBoxGeo(W * 0.16, 0.16, 0.04, { x: +W * 0.36, y: chassisBottom + 0.26, z: +L / 2 - 0.02 })
   );
   blueSirenGeos.push(
     makeBoxGeo(W * 0.24, sirenBarH, 0.24, { x: +W * 0.14, y: sirenBarY, z: sirenZ })
   );
 
   // Bumpers & front grille
-  const bumperH = 0.16;
-  const bumperD = 0.12;
   trimGeos.push(
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: -L / 2 + bumperD / 2 }),
     makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: +L / 2 - bumperD / 2 }),
-    makeBoxGeo(W * 0.45, 0.22, 0.04, { x: 0, y: chassisBottom + 0.30, z: -L / 2 + 0.02 })
+    makeBoxGeo(W * 0.45, 0.18, 0.04, { x: 0, y: chassisBottom + 0.26, z: -L / 2 + 0.02 })
   );
 
   // Dark-blue cab windshield (-Z), side cab windows, and rear door windows (+Z)
@@ -435,8 +453,8 @@ export function createAmbulance(color?: number): THREE.Group {
   const winY = lowerTop + vanBoxH * 0.58;
   const frontCabZ = vanBoxZ - vanBoxL / 2;
   winGeos.push(
-    makeBoxGeo(W * 0.84, winH, 0.04, { x: 0, y: winY, z: frontCabZ }),
-    makeBoxGeo(W * 0.96 + 0.02, winH, 0.82, { x: 0, y: winY, z: frontCabZ + 0.56 }),
+    makeBoxGeo(W * 0.84, winH, 0.04, { x: 0, y: winY, z: frontCabZ - 0.01 }),
+    makeBoxGeo(W * 0.96 + 0.024, winH, 0.82, { x: 0, y: winY, z: frontCabZ + 0.56 }),
     makeBoxGeo(W * 0.32, winH * 0.75, 0.04, { x: -W * 0.22, y: winY + 0.05, z: +L / 2 - 0.02 }),
     makeBoxGeo(W * 0.32, winH * 0.75, 0.04, { x: +W * 0.22, y: winY + 0.05, z: +L / 2 - 0.02 })
   );
@@ -444,7 +462,7 @@ export function createAmbulance(color?: number): THREE.Group {
   // Front headlights flush at -Z
   for (const side of [-1, 1]) {
     headGeos.push(
-      makeBoxGeo(W * 0.18, 0.16, 0.04, { x: side * W * 0.35, y: chassisBottom + 0.30, z: -L / 2 + 0.02 })
+      makeBoxGeo(W * 0.18, 0.16, 0.04, { x: side * W * 0.35, y: chassisBottom + 0.26, z: -L / 2 + 0.02 })
     );
   }
 
@@ -452,17 +470,20 @@ export function createAmbulance(color?: number): THREE.Group {
     buildMergedMesh(whiteGeos, bodyColor, { roughness: 0.45 }),
     buildMergedMesh(redGeos, LOW_POLY_PALETTE.ambulanceRed, {
       emissive: LOW_POLY_PALETTE.ambulanceRed,
-      emissiveIntensity: 0.35
+      emissiveIntensity: 0.35,
+      polygonOffset: true
     }),
     buildMergedMesh(blueSirenGeos, LOW_POLY_PALETTE.sirenBlue, {
       emissive: LOW_POLY_PALETTE.sirenBlue,
-      emissiveIntensity: 0.85
+      emissiveIntensity: 0.85,
+      polygonOffset: true
     }),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
     buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, {
       emissive: LOW_POLY_PALETTE.headlightWarm,
-      emissiveIntensity: 0.9
+      emissiveIntensity: 0.9,
+      polygonOffset: true
     })
   );
 
@@ -507,22 +528,27 @@ export function createAuto(color?: number): THREE.Group {
   const headGeos: THREE.BufferGeometry[] = [];
   const tailGeos: THREE.BufferGeometry[] = [];
 
-  // Green lower body tub (full L x W) + front driver apron shield
+  const bumperH = 0.10;
+  const bumperD = 0.10;
+  const bandH = 0.12;
+  const greenTubH = tubH - bumperH - bandH; // 0.28m (0.64m -> 0.92m)
+
+  // Green upper body tub stacked cleanly ABOVE the yellow band & bumpers (zero coplanar overlap!)
   greenGeos.push(
-    makeBoxGeo(W, tubH, L, { x: 0, y: chassisBottom + tubH / 2, z: 0 }),
+    makeBoxGeo(W, greenTubH, L - 0.016, { x: 0, y: chassisBottom + bumperH + bandH + greenTubH / 2, z: 0 }),
     makeBoxGeo(W * 0.88, pillarH, 0.22, { x: 0, y: tubTop + pillarH / 2, z: -L * 0.30 })
   );
 
-  // Yellow canopy roof (top at H = 1.70m) + rear backrest + lower yellow side band
+  // Yellow canopy roof (top at H = 1.70m) + rear backrest + lower yellow side band (stacked above bumpers)
   const canopyL = L * 0.82;
   const canopyZ = L * 0.05;
   yellowGeos.push(
     makeBoxGeo(W * 0.96, roofH, canopyL, { x: 0, y: roofBottom + roofH / 2, z: canopyZ }),
     makeBoxGeo(W * 0.92, pillarH, 0.16, { x: 0, y: tubTop + pillarH / 2, z: +L / 2 - 0.12 }),
-    makeBoxGeo(W, 0.12, L, { x: 0, y: chassisBottom + 0.08, z: 0 })
+    makeBoxGeo(W, bandH, L - 0.008, { x: 0, y: chassisBottom + bumperH + bandH / 2, z: 0 })
   );
 
-  // Symmetrical roof support pillars, seat bench, bumpers
+  // Symmetrical roof support pillars, seat bench, bumpers & under-tray
   const postX = W * 0.44;
   for (const side of [-1, 1]) {
     trimGeos.push(
@@ -532,32 +558,33 @@ export function createAuto(color?: number): THREE.Group {
   }
   trimGeos.push(
     makeBoxGeo(W * 0.84, 0.14, 0.55, { x: 0, y: tubTop + 0.07, z: +L * 0.18 }),
-    makeBoxGeo(W, 0.10, 0.10, { x: 0, y: chassisBottom + 0.05, z: -L / 2 + 0.05 }),
-    makeBoxGeo(W, 0.10, 0.10, { x: 0, y: chassisBottom + 0.05, z: +L / 2 - 0.05 })
+    makeBoxGeo(W - 0.016, bumperH, L - bumperD * 2, { x: 0, y: chassisBottom + bumperH / 2, z: 0 }),
+    makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: -L / 2 + bumperD / 2 }),
+    makeBoxGeo(W, bumperH, bumperD, { x: 0, y: chassisBottom + bumperH / 2, z: +L / 2 - bumperD / 2 })
   );
 
-  // Inset dark-blue front windshield
+  // Inset dark-blue front windshield (proud of front apron)
   winGeos.push(
-    makeBoxGeo(W * 0.76, pillarH * 0.72, 0.04, { x: 0, y: tubTop + pillarH * 0.54, z: -L * 0.30 - 0.10 })
+    makeBoxGeo(W * 0.76, pillarH * 0.72, 0.04, { x: 0, y: tubTop + pillarH * 0.54, z: -L * 0.30 - 0.105 })
   );
 
-  // Central cyclops headlight + front indicators at -Z, taillights at +Z
+  // Central cyclops headlight + front indicators at -Z, taillights at +Z (proud of green tub)
   headGeos.push(
-    makeBoxGeo(0.22, 0.20, 0.04, { x: 0, y: chassisBottom + 0.32, z: -L / 2 + 0.02 })
+    makeBoxGeo(0.22, 0.18, 0.04, { x: 0, y: chassisBottom + 0.36, z: -L / 2 + 0.02 })
   );
   for (const side of [-1, 1]) {
     tailGeos.push(
-      makeBoxGeo(0.20, 0.12, 0.04, { x: side * W * 0.34, y: chassisBottom + 0.28, z: +L / 2 - 0.02 })
+      makeBoxGeo(0.20, 0.12, 0.04, { x: side * W * 0.34, y: chassisBottom + 0.36, z: +L / 2 - 0.02 })
     );
   }
 
   bodyGroup.add(
     buildMergedMesh(greenGeos, lowerColor),
-    buildMergedMesh(yellowGeos, canopyColor),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
-    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.95 }),
-    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85 })
+    buildMergedMesh(yellowGeos, canopyColor, { polygonOffset: true }),
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
+    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.95, polygonOffset: true }),
+    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85, polygonOffset: true })
   );
 
   patchObjectHierarchy(root);
@@ -590,7 +617,7 @@ export function createBus(color?: number): THREE.Group {
   const tailGeos: THREE.BufferGeometry[] = [];
 
   bodyGeos.push(
-    makeBoxGeo(W, mainBodyH, L, { x: 0, y: chassisBottom + mainBodyH / 2, z: 0 })
+    makeBoxGeo(W - 0.016, mainBodyH, L - 0.016, { x: 0, y: chassisBottom + mainBodyH / 2, z: 0 })
   );
   stripeGeos.push(
     makeBoxGeo(W, 0.24, L, { x: 0, y: chassisBottom + 0.85, z: 0 }),
@@ -634,11 +661,11 @@ export function createBus(color?: number): THREE.Group {
 
   bodyGroup.add(
     buildMergedMesh(bodyGeos, bodyColor),
-    buildMergedMesh(stripeGeos, 0xfef3c7),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
-    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9 }),
-    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85 })
+    buildMergedMesh(stripeGeos, 0xfef3c7, { polygonOffset: true }),
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
+    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9, polygonOffset: true }),
+    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85, polygonOffset: true })
   );
 
   patchObjectHierarchy(root);
@@ -690,7 +717,7 @@ export function createTruck(color?: number): THREE.Group {
 
   // Full-length steel chassis frame & bumpers spanning exact L x W
   trimGeos.push(
-    makeBoxGeo(W, frameH, L, { x: 0, y: chassisBottom + frameH / 2, z: 0 }),
+    makeBoxGeo(W, frameH, L - 0.016, { x: 0, y: chassisBottom + frameH / 2, z: 0 }),
     makeBoxGeo(W * 0.54, 0.48, 0.04, { x: 0, y: frameTop + 0.34, z: -L / 2 + 0.02 })
   );
 
@@ -698,8 +725,8 @@ export function createTruck(color?: number): THREE.Group {
   const winY = frameTop + cabMainH * 0.68;
   const winH = 0.62;
   winGeos.push(
-    makeBoxGeo(W * 0.84, winH, 0.04, { x: 0, y: winY, z: -L / 2 + 0.02 }),
-    makeBoxGeo(W * 0.96 + 0.02, winH, cabL * 0.56, { x: 0, y: winY, z: cabZ })
+    makeBoxGeo(W * 0.84, winH, 0.04, { x: 0, y: winY, z: -L / 2 - 0.006 + 0.02 }),
+    makeBoxGeo(W * 0.96 + 0.024, winH, cabL * 0.56, { x: 0, y: winY, z: cabZ })
   );
 
   for (const side of [-1, 1]) {
@@ -714,10 +741,10 @@ export function createTruck(color?: number): THREE.Group {
   bodyGroup.add(
     buildMergedMesh(cabGeos, cabColor),
     buildMergedMesh(cargoGeos, 0x15803d),
-    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8 }),
-    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5 }),
-    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9 }),
-    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85 })
+    buildMergedMesh(trimGeos, LOW_POLY_PALETTE.bumperDark, { roughness: 0.8, polygonOffset: true }),
+    buildMergedMesh(winGeos, LOW_POLY_PALETTE.windowDarkBlue, { roughness: 0.2, metalness: 0.5, polygonOffset: true }),
+    buildMergedMesh(headGeos, LOW_POLY_PALETTE.headlightWarm, { emissive: LOW_POLY_PALETTE.headlightWarm, emissiveIntensity: 0.9, polygonOffset: true }),
+    buildMergedMesh(tailGeos, LOW_POLY_PALETTE.taillightRed, { emissive: LOW_POLY_PALETTE.taillightRed, emissiveIntensity: 0.85, polygonOffset: true })
   );
 
   patchObjectHierarchy(root);
