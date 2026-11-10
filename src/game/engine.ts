@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   GAME_CONFIG,
+  PERF_CONFIG,
   ROAD_Y,
   SIDEWALK_Y,
   GROUND_Y,
@@ -20,6 +21,7 @@ import {
   GameState,
   PowerupType,
   RickshawSkin,
+  NeonColorId,
   VehicleId,
   MysteryVehicleId,
   WeatherType,
@@ -27,6 +29,14 @@ import {
 } from './config';
 import { SoundFX } from './audio';
 import { TextureCache } from './textures';
+import { NPCManager } from './npcs.js';
+import { ShopRow, setNight, updateShops, showShopGallery } from './shops.js';
+import {
+  BuildingManager,
+  setNight as setBuildingNight,
+  updateBuildings,
+  showBuildingGallery
+} from './buildings.js';
 import {
   createDetailedRickshaw,
   createElectricTransmissionTower,
@@ -46,6 +56,7 @@ import {
   createBedfordTruck,
   createSahiwalCow,
   createOverheadStreetArch,
+  createFestiveLightGarland,
   createBackgroundSkyline,
   createHydraulicPickup,
   createCNGCylinderPickup,
@@ -55,6 +66,11 @@ import {
   createChingchi,
   createTractor,
   createTonga,
+  createSpiderManMesh,
+  createIronManMesh,
+  createCaptainAmericaMesh,
+  createThorMesh,
+  createHulkMesh,
   createFlyoverStructure,
   createRoadHurdle,
   createShortcutSign,
@@ -72,7 +88,25 @@ import {
   PatternElement
 } from './patterns';
 import { PoliceChaseController, ChaseState, ArrestPhase } from './police';
-import { PLAYABLE_VEHICLES, VehicleDef, getSelectedVehicle, setSelectedVehicle } from './vehicles';
+import {
+  PLAYABLE_VEHICLES,
+  VehicleDef,
+  getSelectedVehicle,
+  setSelectedVehicle,
+  createPlayableVehicleById
+} from './vehicles';
+import {
+  LANE_WIDTH,
+  LANE_CENTERS,
+  SIDEWALK_WIDTH,
+  BUILDING_SETBACK,
+  VEHICLE_SPECS
+} from './constants';
+import {
+  setSceneDebugHelpersVisible,
+  createModelShowroom,
+  ModelValidationResult
+} from './debug';
 import { PickupSystemManager, createPlayerShieldBubble, runHeadlessFuelSimulation } from './pickups';
 import {
   groundHeightAt,
@@ -94,6 +128,12 @@ import {
 } from './terrain';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
+declare global {
+  interface Window {
+    playerModel?: THREE.Object3D;
+  }
+}
+
 // Module-level reusable scratch vectors & matrices (zero allocation in physics & render loop)
 const _scratchVec1 = new THREE.Vector3();
 const _scratchVec2 = new THREE.Vector3();
@@ -112,19 +152,26 @@ let _chunkShoulderGeo: THREE.BufferGeometry | null = null;
 let _chunkShoulderMat: THREE.Material | null = null;
 let _chunkCurbsGeo: THREE.BufferGeometry | null = null;
 let _chunkCurbMat: THREE.Material | null = null;
+let _chunkCurbsBlackGeo: THREE.BufferGeometry | null = null;
+let _chunkCurbBlackMat: THREE.Material | null = null;
 let _chunkSidewalksGeo: THREE.BufferGeometry | null = null;
 let _chunkSidewalkMat: THREE.Material | null = null;
 let _chunkLampMetalGeo: THREE.BufferGeometry | null = null;
 let _chunkLampMetalMat: THREE.Material | null = null;
 let _chunkLampBulbsGeo: THREE.BufferGeometry | null = null;
 let _chunkLampBulbMat: THREE.Material | null = null;
+let _chunkPalmTrunksGeo: THREE.BufferGeometry | null = null;
+let _chunkPalmTrunkMat: THREE.Material | null = null;
+let _chunkPalmFrondsGeo: THREE.BufferGeometry | null = null;
+let _chunkPalmFrondMat: THREE.Material | null = null;
 
 function initSharedChunkAssets() {
   if (_chunkGroundGeo) return;
 
   const roadW = GAME_CONFIG.ROAD_WIDTH;
-  const sidewalkW = 5.0;
+  const sidewalkW = SIDEWALK_WIDTH;
   const chunkLen = GAME_CONFIG.CHUNK_LENGTH;
+  const dividerX = LANE_WIDTH * 0.5; // ±1.75m between [-3.5, 0, +3.5] lanes
 
   // Ground plane
   _chunkGroundGeo = new THREE.PlaneGeometry(220, chunkLen);
@@ -150,27 +197,34 @@ function initSharedChunkAssets() {
 
   // Dashed lines & Directional arrows (merged into single geometry)
   const lineParts: THREE.BufferGeometry[] = [];
-  [-2.0, 2.0].forEach((lx) => {
+  [-dividerX, dividerX].forEach((lx) => {
     for (let dz = -chunkLen / 2 + 3; dz < chunkLen / 2; dz += 6) {
-      const g = new THREE.PlaneGeometry(0.22, 3.5);
+      const g = new THREE.PlaneGeometry(0.18, 3.2);
       g.rotateX(-Math.PI / 2);
       g.translate(lx, ROAD_Y + 0.015, dz);
       lineParts.push(g);
     }
   });
-  [-4.0, 0, 4.0].forEach((ax) => {
-    const arrow = new THREE.PlaneGeometry(0.7, 2.4);
+  LANE_CENTERS.forEach((ax) => {
+    const arrow = new THREE.PlaneGeometry(0.65, 2.2);
     arrow.rotateX(-Math.PI / 2);
     arrow.translate(ax, ROAD_Y + 0.018, -10);
     lineParts.push(arrow);
   });
+  // Karachi Pedestrian Zebra Crossing Stripes at rz = -22m
+  for (let zx = -roadW * 0.42; zx <= roadW * 0.42; zx += 0.95) {
+    const stripe = new THREE.PlaneGeometry(0.46, 2.8);
+    stripe.rotateX(-Math.PI / 2);
+    stripe.translate(zx, ROAD_Y + 0.017, -chunkLen / 2 + 3.5);
+    lineParts.push(stripe);
+  }
   _chunkLineMarkingsGeo = mergeGeometries(lineParts, false);
   lineParts.forEach((g) => g.dispose());
   _chunkLineMat = createGameMaterial({ kind: 'basic', color: 0xf8fafc });
 
   // Studs
   const studParts: THREE.BufferGeometry[] = [];
-  [-2.0, 2.0].forEach((rx) => {
+  [-dividerX, dividerX].forEach((rx) => {
     for (let rz = -chunkLen / 2 + 1; rz < chunkLen / 2; rz += 8) {
       const stud = new THREE.BoxGeometry(0.14, 0.04, 0.14);
       stud.translate(rx, ROAD_Y + 0.02, rz);
@@ -193,16 +247,27 @@ function initSharedChunkAssets() {
   shoulderParts.forEach((g) => g.dispose());
   _chunkShoulderMat = createGameMaterial({ kind: 'basic', color: 0xfacc15 });
 
-  // Curbs
+  // Alternating Yellow & Black Karachi Traffic Curbs
   const curbParts: THREE.BufferGeometry[] = [];
+  const curbBlackParts: THREE.BufferGeometry[] = [];
   [-1, 1].forEach((side) => {
     const curb = new THREE.BoxGeometry(0.4, SIDEWALK_Y + 0.05, chunkLen);
     curb.translate(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, 0);
     curbParts.push(curb);
+
+    for (let cz = -chunkLen / 2 + 2; cz < chunkLen / 2; cz += 4) {
+      const blk = new THREE.BoxGeometry(0.42, SIDEWALK_Y + 0.06, 2.0);
+      blk.translate(side * (roadW / 2 + 0.2), (SIDEWALK_Y + 0.05) * 0.5, cz);
+      curbBlackParts.push(blk);
+    }
   });
   _chunkCurbsGeo = mergeGeometries(curbParts, false);
   curbParts.forEach((g) => g.dispose());
   _chunkCurbMat = createGameMaterial({ color: 0xf59e0b, roughness: 0.5 });
+
+  _chunkCurbsBlackGeo = mergeGeometries(curbBlackParts, false);
+  curbBlackParts.forEach((g) => g.dispose());
+  _chunkCurbBlackMat = createGameMaterial({ color: 0x18181b, roughness: 0.65 });
 
   // Sidewalks
   const walkParts: THREE.BufferGeometry[] = [];
@@ -239,6 +304,77 @@ function initSharedChunkAssets() {
   _chunkLampBulbsGeo = mergeGeometries(bulbParts, false);
   bulbParts.forEach((g) => g.dispose());
   _chunkLampBulbMat = createGameMaterial({ kind: 'basic', color: 0xfef08a });
+
+  // Merged Sidewalk Date-Palm Trees (6 trees per chunk: 2 draw calls instead of 42 meshes)
+  const palmTrunkParts: THREE.BufferGeometry[] = [];
+  const palmFrondParts: THREE.BufferGeometry[] = [];
+  [-1, 1].forEach((side) => {
+    [-15, 0, 15].forEach((pz) => {
+      const tx = side * (roadW / 2 + 1.9);
+      const ty = SIDEWALK_Y;
+      const trunk = new THREE.CylinderGeometry(0.18, 0.28, 4.8, 7);
+      trunk.translate(tx, ty + 2.4, pz);
+      palmTrunkParts.push(trunk);
+
+      for (let f = 0; f < 6; f++) {
+        const angle = (f / 6) * Math.PI * 2;
+        const frond = new THREE.BoxGeometry(0.45, 0.14, 1.9);
+        frond.rotateX(0.32);
+        frond.rotateY(angle);
+        frond.translate(
+          tx + Math.sin(angle) * 0.85,
+          ty + 4.75,
+          pz + Math.cos(angle) * 0.85
+        );
+        palmFrondParts.push(frond);
+      }
+    });
+  });
+  _chunkPalmTrunksGeo = mergeGeometries(palmTrunkParts, false);
+  palmTrunkParts.forEach((g) => g.dispose());
+  _chunkPalmTrunkMat = createGameMaterial({ color: 0x78350f, roughness: 0.9, flatShading: true });
+
+  _chunkPalmFrondsGeo = mergeGeometries(palmFrondParts, false);
+  palmFrondParts.forEach((g) => g.dispose());
+  _chunkPalmFrondMat = createGameMaterial({ color: 0x15803d, roughness: 0.75, flatShading: true });
+
+  // Expand bounding spheres slightly on shared chunk geometries so frustumCulled = true works safely with the vertex world-curve shader
+  [
+    _chunkGroundGeo,
+    _chunkRoadGeo,
+    _chunkLineMarkingsGeo,
+    _chunkStudsGeo,
+    _chunkShoulderGeo,
+    _chunkCurbsGeo,
+    _chunkCurbsBlackGeo,
+    _chunkSidewalksGeo,
+    _chunkLampMetalGeo,
+    _chunkLampBulbsGeo,
+    _chunkPalmTrunksGeo,
+    _chunkPalmFrondsGeo
+  ].forEach((geo) => {
+    if (geo) {
+      geo.computeBoundingSphere();
+      if (geo.boundingSphere) {
+        geo.boundingSphere.radius += 14;
+      }
+    }
+  });
+}
+
+export interface PerfMetrics {
+  fps: number;
+  frameTimeMs: number;
+  drawCalls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+  jsHeapMB: number | null;
+  activeNPCs: number;
+  activeVehicles: number;
+  activeProps: number;
+  activeParticles: number;
+  leakWarning: boolean;
 }
 
 export interface GameStats {
@@ -307,7 +443,24 @@ export interface GameStats {
   debugBaseMarkers: boolean;
   debugHeightOverlay: boolean;
   debugWireframe: boolean;
+  debugBoundingBoxes: boolean;
+  isShowroomMode: boolean;
+  showroomValidationResults: ModelValidationResult[];
   unpatchedCount: number;
+  // Open Street Shop & Chai Nitro Boost Telemetry
+  chaiNitroCharge: number; // 0 to 100
+  isNitroActive: boolean;
+  nitroTimer: number;
+  roadsideOrdersServed: number;
+  isNPCGalleryOpen: boolean;
+  isShopGalleryOpen: boolean;
+  isBuildingGalleryOpen: boolean;
+  buildingGalleryStage: number;
+  currentDistrict: string;
+  streakCount: number;
+  // Stage 0 Performance Profiler Telemetry
+  showPerfOverlay: boolean;
+  perfMetrics: PerfMetrics;
 }
 
 interface Particle {
@@ -364,6 +517,16 @@ export class SubwayRickshawEngine {
   private fuelEmptyTimer = 0;
   private stallSpeedFactor = 1.0;
 
+  // (A2) Open Roadside Shop & Chai Nitro Overdrive State
+  public chaiNitroCharge = 35; // Starts at 35% so player can charge & test quickly
+  public isNitroActive = false;
+  public nitroTimer = 0;
+  public roadsideOrdersServed = 0;
+  public currentDistrict = 'Saddar & Empress Mkt';
+  private currentDistrictIndex = 0;
+  public streakCount = 0;
+  private streakTimer = 0;
+
   // (B) Shield System State
   public shieldVariant: PickupVariantId | null = null;
   public shieldTimer = 0;
@@ -399,17 +562,42 @@ export class SubwayRickshawEngine {
   private skyDome!: THREE.Mesh;
   private cloudGroup!: THREE.Group;
   private sunLight!: THREE.DirectionalLight;
-  private ambientLight!: THREE.AmbientLight;
   private hemiLight!: THREE.HemisphereLight;
-  private nightStreetLights: THREE.PointLight[] = [];
+  private playerBlobShadow!: THREE.Mesh;
+  public isMobile: boolean = false;
+  public showPerfOverlay: boolean = false;
+  public perfMetrics: PerfMetrics = {
+    fps: 60,
+    frameTimeMs: 16.6,
+    drawCalls: 0,
+    triangles: 0,
+    geometries: 0,
+    textures: 0,
+    jsHeapMB: null,
+    activeNPCs: 0,
+    activeVehicles: 0,
+    activeProps: 0,
+    activeParticles: 0,
+    leakWarning: false
+  };
+  private lastPerfWarnTime: number = 0;
+  private lastLeakSampleTime: number = 0;
+  private prevGeometriesCount: number = 0;
+  private prevTexturesCount: number = 0;
+  private leakGrowthStreak: number = 0;
 
   // Entities
   private rickshaw!: THREE.Group;
   public policeChase!: PoliceChaseController;
+  public npcManager!: NPCManager;
+  public isNPCGalleryOpen: boolean = false;
+  public isShopGalleryOpen: boolean = false;
+  public isBuildingGalleryOpen: boolean = false;
+  public buildingGalleryStage: number = 0;
 
   // Active Playable Vehicle & Mystery Transformation
   public activeVehicle: VehicleId = getSelectedVehicle();
-  public vehicleDef: VehicleDef = PLAYABLE_VEHICLES[this.activeVehicle] || PLAYABLE_VEHICLES.rickshaw;
+  public vehicleDef: VehicleDef = PLAYABLE_VEHICLES[this.activeVehicle] || PLAYABLE_VEHICLES.rickshaw || PLAYABLE_VEHICLES.tuner_car;
   private truckShieldUsed: boolean = false;
   public isMysteryActive: boolean = false;
   public mysteryVehicle: MysteryVehicleId | null = null;
@@ -432,12 +620,17 @@ export class SubwayRickshawEngine {
   private nextChunkIndex: number = 0;
   private originZOffset: number = 0;
 
-  // Debug Visual Overlays (Keys C, G, F, H, K, L in Debug Mode)
+  // Debug Visual Overlays (Keys B, C, G, F, H, K, L in Debug Mode)
   public curveEnabled: boolean = true;
   public debugGroundGrid: boolean = false;
   public debugBaseMarkers: boolean = false;
   public debugHeightOverlay: boolean = false;
   public debugWireframe: boolean = false;
+  public debugBoundingBoxes: boolean = false;
+  public isShowroomMode: boolean = false;
+  public showroomValidationResults: ModelValidationResult[] = [];
+  private showroomGroup: THREE.Group | null = null;
+  public showroomFocusIndex: number = -1;
   public unpatchedCount: number = 0;
   private debugGridGroup!: THREE.Group;
   private debugMarkerGroup!: THREE.Group;
@@ -504,7 +697,12 @@ export class SubwayRickshawEngine {
     jetpackLevel: 1,
     hydraulicLevel: 1,
     starterShield: 0,
-    fuelEfficiencyLevel: 1
+    fuelEfficiencyLevel: 1,
+    chaiHeadstartCount: 0,
+    reserveFuelCount: 0,
+    wardenBribeCount: 0,
+    activeNeon: 'none',
+    unlockedNeons: ['none']
   };
 
   // Fixed Timestep Accumulator (60 Hz physics)
@@ -550,35 +748,63 @@ export class SubwayRickshawEngine {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(GAME_CONFIG.FOG_COLOR, GAME_CONFIG.FOG_NEAR, GAME_CONFIG.FOG_FAR);
 
-    const aspect = window.innerWidth / window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(58, aspect, 0.1, 2500);
+    this.isMobile =
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+      window.innerWidth < 768 ||
+      navigator.maxTouchPoints > 1;
 
+    const aspect = window.innerWidth / window.innerHeight;
+    // Tight far plane (390m, just outside skyDome 360m and FOG_FAR 245m) for better mobile depth precision & frustum culling
+    this.camera = new THREE.PerspectiveCamera(58, aspect, 0.25, 390);
+
+    // Stage 1 Renderer Settings: antialias off on mobile, stencil false, alpha false, high-performance
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
-      antialias: true,
-      powerPreference: 'high-performance'
+      antialias: !this.isMobile,
+      powerPreference: 'high-performance',
+      stencil: false,
+      alpha: false,
+      depth: true
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+
+    const maxDpr = this.isMobile ? 1.15 : 1.5;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
+
+    // Turn real-time shadows off globally by default (use cheap flat blob shadows instead)
+    this.renderer.shadowMap.enabled = false;
+    this.renderer.info.autoReset = false;
 
     this.createSkyDome();
 
-    // High quality dynamic lighting rig (Day-Night adaptable)
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
-    this.scene.add(this.ambientLight);
-
-    this.hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x1e293b, 0.8);
+    // Stage 1 Lighting Rig: At most 1 DirectionalLight + 1 HemisphereLight (0 PointLights, 0 SpotLights)
+    this.hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x334155, 1.85);
     this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(0xffedd5, 1.9);
+    this.sunLight.castShadow = false;
     this.sunLight.position.set(30, 50, 25);
     this.scene.add(this.sunLight);
 
-    // Player Vehicle with selected custom Truck Art skin
+    // Player Vehicle with selected custom 3D model
     this.rickshaw = this.createPlayerVehicleMesh(this.activeVehicle, this.currentSkin);
     this.rickshaw.position.set(0, ROAD_Y, 0);
     patchObjectHierarchy(this.rickshaw);
     this.scene.add(this.rickshaw);
+
+    // Dedicated Cheap Blob Shadow (flat dark transparent circle) under Player Vehicle
+    const blobGeo = new THREE.CircleGeometry(1.35, 16);
+    blobGeo.rotateX(-Math.PI / 2);
+    const blobMat = createGameMaterial({
+      kind: 'basic',
+      color: 0x090d16,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false
+    });
+    this.playerBlobShadow = new THREE.Mesh(blobGeo, blobMat);
+    this.playerBlobShadow.position.set(0, ROAD_Y + 0.025, 0);
+    this.scene.add(this.playerBlobShadow);
 
     // Player Shield Bubble (hex/flower energy dome + hit-count rings)
     this.playerShieldBubble = createPlayerShieldBubble();
@@ -590,6 +816,10 @@ export class SubwayRickshawEngine {
 
     // Lahore Highway Patrol Police Cars Controller (2 cars right behind player from start)
     this.policeChase = new PoliceChaseController(this.scene, this.sound);
+
+    // Karachi Living Street Modular NPC System (15 procedural NPC & Animal types)
+    this.npcManager = new NPCManager();
+    this.npcManager.init(this.scene);
 
     // Debug Visual Overlays (Ground Grid, Base Markers, Height Overlay Line)
     this.initDebugVisuals();
@@ -680,9 +910,42 @@ export class SubwayRickshawEngine {
 
   private aiRickshawPool: THREE.Group[] = [];
   private motorbikePool: THREE.Group[] = [];
+  private obstaclePools = new Map<string, THREE.Group[]>();
+  private sharedCoinGeo?: THREE.CylinderGeometry;
+  private sharedCoinMat?: THREE.Material;
+
+  private acquirePooledObstacle(poolKey: string, factory: () => THREE.Group): THREE.Group {
+    let list = this.obstaclePools.get(poolKey);
+    if (!list) {
+      list = [];
+      this.obstaclePools.set(poolKey, list);
+    }
+    let item = list.find((o) => !o.visible);
+    if (!item) {
+      item = factory();
+      item.userData._poolKey = poolKey;
+      patchObjectHierarchy(item);
+      list.push(item);
+      this.scene.add(item);
+    }
+    item.visible = true;
+    item.rotation.set(0, 0, 0);
+    item.scale.set(1, 1, 1);
+    return item;
+  }
+
+  private releasePooledObstacle(obs: THREE.Object3D) {
+    if (obs.userData && obs.userData._poolKey) {
+      obs.visible = false;
+      obs.position.set(0, -100, 500);
+    } else {
+      this.disposeObjectHierarchy(obs);
+      this.scene.remove(obs);
+    }
+  }
 
   private initObjectPools() {
-    // Pre-allocate car pool to prevent garbage collection pauses during runs
+    // Pre-allocate car pool using unified VEHICLE_SPECS factories (car, sedan, ambulance)
     const carTypes: CarType[] = ['HATCHBACK', 'SEDAN', 'SUV'];
     for (let i = 0; i < 24; i++) {
       const car = createTrafficCar(carTypes[i % carTypes.length]);
@@ -711,10 +974,10 @@ export class SubwayRickshawEngine {
       this.scene.add(b);
     }
 
-    // Pre-allocate coin pool with shared curve-patched material and baked disc orientation
-    const coinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 16);
-    coinGeo.rotateX(Math.PI / 2); // Bake disc orientation so coin faces camera (±Z) and spins cleanly around Y axis
-    const coinMat = createGameMaterial({
+    // Pre-allocate coin pool with ONE shared 8-segment geometry and ONE shared material
+    this.sharedCoinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 8);
+    this.sharedCoinGeo.rotateX(Math.PI / 2); // Bake disc orientation so coin faces camera (±Z) and spins cleanly around Y axis
+    this.sharedCoinMat = createGameMaterial({
       color: 0xfacc15,
       emissive: 0xd97706,
       emissiveIntensity: 0.48,
@@ -722,26 +985,26 @@ export class SubwayRickshawEngine {
       roughness: 0.22
     });
     for (let i = 0; i < 65; i++) {
-      const coin = new THREE.Mesh(coinGeo, coinMat);
+      const coin = new THREE.Mesh(this.sharedCoinGeo, this.sharedCoinMat);
       coin.rotation.set(0, 0, 0);
       coin.scale.set(1, 1, 1);
-      coin.frustumCulled = false;
+      coin.frustumCulled = true;
       coin.visible = false;
       this.coinPool.push(coin);
       this.scene.add(coin);
     }
 
-    // Pre-allocate exhaust puff mesh pool (zero runtime allocations)
+    // Pre-allocate exhaust puff mesh pool (ONE shared geometry & ONE shared material)
     for (let i = 0; i < 28; i++) {
-      const puff = new THREE.Mesh(this.sharedPuffGeo, this.sharedPuffMat.clone());
+      const puff = new THREE.Mesh(this.sharedPuffGeo, this.sharedPuffMat);
       puff.visible = false;
       this.puffPool.push(puff);
       this.scene.add(puff);
     }
 
-    // Pre-allocate coin sparkle pool (zero runtime allocations)
-    for (let i = 0; i < 32; i++) {
-      const sparkle = new THREE.Mesh(this.sharedSparkleGeo, this.sharedSparkleMat.clone());
+    // Pre-allocate coin/burst sparkle pool (ONE shared geometry & ONE shared material)
+    for (let i = 0; i < 48; i++) {
+      const sparkle = new THREE.Mesh(this.sharedSparkleGeo, this.sharedSparkleMat);
       sparkle.visible = false;
       this.sparklePool.push(sparkle);
       this.scene.add(sparkle);
@@ -762,7 +1025,7 @@ export class SubwayRickshawEngine {
     this.skyGroup.name = 'SkyAndParallaxGroup';
     this.scene.add(this.skyGroup);
 
-    const skyGeo = new THREE.SphereGeometry(360, 24, 16);
+    const skyGeo = new THREE.SphereGeometry(360, 12, 8);
     const canvas = document.createElement('canvas');
     canvas.width = 16;
     canvas.height = 256;
@@ -788,6 +1051,8 @@ export class SubwayRickshawEngine {
     });
     this.skyDome = new THREE.Mesh(skyGeo, skyMat);
     this.skyDome.frustumCulled = false;
+    this.skyDome.matrixAutoUpdate = false;
+    this.skyDome.updateMatrix();
     this.skyGroup.add(this.skyDome);
 
     // Distant Parallax Skyline attached to camera-following skyGroup (not road chunks!)
@@ -795,12 +1060,14 @@ export class SubwayRickshawEngine {
       for (let sz = -260; sz <= 60; sz += 80) {
         const bgSkyline = createBackgroundSkyline(side);
         bgSkyline.position.set(0, ROAD_Y, sz);
+        bgSkyline.matrixAutoUpdate = false;
+        bgSkyline.updateMatrix();
         patchObjectHierarchy(bgSkyline, 0.25);
         this.skyGroup.add(bgSkyline);
       }
     });
 
-    // High, Far, Flattened Soft Clouds in camera-following skyGroup
+    // High, Far, Flattened Soft Clouds in camera-following skyGroup (shared low-poly spheres)
     this.cloudGroup = new THREE.Group();
     const cloudMat = createGameMaterial({
       color: 0xffffff,
@@ -808,19 +1075,20 @@ export class SubwayRickshawEngine {
       flatShading: true,
       curveMultiplier: 0.15
     });
+    const cloudGeoSmall = new THREE.SphereGeometry(14, 7, 6);
+    const cloudGeoLarge = new THREE.SphereGeometry(19, 7, 6);
 
     for (let c = 0; c < 18; c++) {
       const cloud = new THREE.Group();
       const numPuffs = 3 + (c % 3);
       for (let p = 0; p < numPuffs; p++) {
-        const puff = new THREE.Mesh(
-          new THREE.SphereGeometry(14 + (p % 2) * 5, 8, 8),
-          cloudMat
-        );
+        const puff = new THREE.Mesh(p % 2 === 0 ? cloudGeoSmall : cloudGeoLarge, cloudMat);
         // Flattened soft cloud silhouette well above building tops
         puff.scale.set(1.6, 0.36, 1.2);
         puff.position.set((p - numPuffs / 2) * 14, (p % 2) * 1.2, 0);
-        puff.frustumCulled = false;
+        puff.frustumCulled = true;
+        puff.matrixAutoUpdate = false;
+        puff.updateMatrix();
         cloud.add(puff);
       }
       cloud.position.set(
@@ -828,6 +1096,8 @@ export class SubwayRickshawEngine {
         78 + (c % 4) * 12,
         -120 - Math.floor(c / 6) * 95
       );
+      cloud.matrixAutoUpdate = false;
+      cloud.updateMatrix();
       this.cloudGroup.add(cloud);
     }
     this.skyGroup.add(this.cloudGroup);
@@ -853,56 +1123,91 @@ export class SubwayRickshawEngine {
     chunk.userData.chunkIndex = chunkIndex;
 
     const roadW = GAME_CONFIG.ROAD_WIDTH;
-    const sidewalkW = 5.0;
 
     initSharedChunkAssets();
 
     // Continuous Ground Plane at GROUND_Y (-0.05) extending far beyond sidewalks
     const groundPlane = new THREE.Mesh(_chunkGroundGeo!, _chunkGroundMat!);
     groundPlane.position.set(0, GROUND_Y, 0);
-    groundPlane.frustumCulled = false;
+    groundPlane.frustumCulled = true;
+    groundPlane.matrixAutoUpdate = false;
+    groundPlane.updateMatrix();
     chunk.add(groundPlane);
 
     // High-Resolution Rain-Slicked Wet Asphalt PBR Shader Material
     const road = new THREE.Mesh(_chunkRoadGeo!, _chunkRoadMat!);
     road.position.set(0, ROAD_Y, 0);
-    road.frustumCulled = false;
+    road.frustumCulled = true;
+    road.matrixAutoUpdate = false;
+    road.updateMatrix();
     chunk.add(road);
 
     // Pre-merged Dashed White Lane Lines & Directional Arrows (1 draw call)
     const lineMarkings = new THREE.Mesh(_chunkLineMarkingsGeo!, _chunkLineMat!);
-    lineMarkings.frustumCulled = false;
+    lineMarkings.frustumCulled = true;
+    lineMarkings.matrixAutoUpdate = false;
+    lineMarkings.updateMatrix();
     chunk.add(lineMarkings);
 
     // Pre-merged Reflective Cat's-Eye Studs (1 draw call)
     const studs = new THREE.Mesh(_chunkStudsGeo!, _chunkStudMat!);
-    studs.frustumCulled = false;
+    studs.frustumCulled = true;
+    studs.matrixAutoUpdate = false;
+    studs.updateMatrix();
     chunk.add(studs);
 
     // Pre-merged Yellow Shoulder Striping (1 draw call)
     const shoulders = new THREE.Mesh(_chunkShoulderGeo!, _chunkShoulderMat!);
-    shoulders.frustumCulled = false;
+    shoulders.frustumCulled = true;
+    shoulders.matrixAutoUpdate = false;
+    shoulders.updateMatrix();
     chunk.add(shoulders);
 
-    // Pre-merged Curbs (1 draw call)
+    // Pre-merged Curbs (Yellow + Black Karachi Curb Stripes)
     const curbs = new THREE.Mesh(_chunkCurbsGeo!, _chunkCurbMat!);
-    curbs.frustumCulled = false;
+    curbs.frustumCulled = true;
+    curbs.matrixAutoUpdate = false;
+    curbs.updateMatrix();
     chunk.add(curbs);
+    const curbsBlack = new THREE.Mesh(_chunkCurbsBlackGeo!, _chunkCurbBlackMat!);
+    curbsBlack.frustumCulled = true;
+    curbsBlack.matrixAutoUpdate = false;
+    curbsBlack.updateMatrix();
+    chunk.add(curbsBlack);
 
     // Pre-merged Sidewalks (1 draw call)
     const sidewalks = new THREE.Mesh(_chunkSidewalksGeo!, _chunkSidewalkMat!);
-    sidewalks.frustumCulled = false;
+    sidewalks.frustumCulled = true;
+    sidewalks.matrixAutoUpdate = false;
+    sidewalks.updateMatrix();
     chunk.add(sidewalks);
 
     // Pre-merged Ornate Streetlamps Metal (poles & arms) (1 draw call)
     const lamps = new THREE.Mesh(_chunkLampMetalGeo!, _chunkLampMetalMat!);
-    lamps.frustumCulled = false;
+    lamps.frustumCulled = true;
+    lamps.matrixAutoUpdate = false;
+    lamps.updateMatrix();
     chunk.add(lamps);
 
     // Pre-merged Streetlamp Bulbs (1 draw call)
     const bulbs = new THREE.Mesh(_chunkLampBulbsGeo!, _chunkLampBulbMat!);
-    bulbs.frustumCulled = false;
+    bulbs.frustumCulled = true;
+    bulbs.matrixAutoUpdate = false;
+    bulbs.updateMatrix();
     chunk.add(bulbs);
+
+    // Pre-merged Sidewalk Date-Palm Trees (2 draw calls instead of 42 meshes per chunk)
+    const palmTrunks = new THREE.Mesh(_chunkPalmTrunksGeo!, _chunkPalmTrunkMat!);
+    palmTrunks.frustumCulled = true;
+    palmTrunks.matrixAutoUpdate = false;
+    palmTrunks.updateMatrix();
+    chunk.add(palmTrunks);
+
+    const palmFronds = new THREE.Mesh(_chunkPalmFrondsGeo!, _chunkPalmFrondMat!);
+    palmFronds.frustumCulled = true;
+    palmFronds.matrixAutoUpdate = false;
+    palmFronds.updateMatrix();
+    chunk.add(palmFronds);
 
     // Multi-Layer Roadside Puddles at exact ROAD_Y (tracked in activePuddles)
     const numPuddles = 2;
@@ -913,54 +1218,20 @@ export class SubwayRickshawEngine {
         ROAD_Y,
         -GAME_CONFIG.CHUNK_LENGTH / 2 + (p + 0.5) * (GAME_CONFIG.CHUNK_LENGTH / numPuddles)
       );
+      puddle.matrixAutoUpdate = false;
+      puddle.updateMatrix();
       chunk.add(puddle);
       this.activePuddles.push({ puddle, chunk });
     }
 
     [-1, 1].forEach((side) => {
-      // Palm Trees anchored on sidewalk at exact SIDEWALK_Y
-      [-14, 0, 14].forEach((pz) => {
-        const palm = createPalmTree();
-        palm.position.set(side * (roadW / 2 + 1.9), SIDEWALK_Y, pz);
-        palm.userData.propCategory = 'SIDEWALK_PROP';
-        palm.userData.expectedBaseY = SIDEWALK_Y;
-        chunk.add(palm);
-      });
+      // Detailed Pakistani Bazaar Shop Row (1-to-3 story hand-made shops with recessed interiors, shutters, awnings & Urdu/English signboards)
+      const shopRow = ShopRow.generate(zPos, side, chunkIndex);
+      chunk.add(shopRow);
 
-      // Continuous Urban Streetscape: Merged One-Mesh Buildings anchored at exact ROAD_Y (0)
-      const bStyle1 = (chunkIndex + (side > 0 ? 1 : 0)) % 5;
-      const b1 = createCityBuilding(bStyle1);
-      b1.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-      b1.position.set(side * (roadW / 2 + 3.8), ROAD_Y, -16);
-      b1.userData.propCategory = 'BUILDING';
-      b1.userData.expectedBaseY = ROAD_Y;
-      chunk.add(b1);
-
-      // Mid-Block (Z = 0) - Traditional Dhaba or Paan Shop anchored on sidewalk at SIDEWALK_Y
-      if ((chunkIndex + (side > 0 ? 1 : 0)) % 2 === 0) {
-        const dhaba = createModularDhaba(chunkIndex % 4);
-        dhaba.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-        dhaba.position.set(side * (roadW / 2 + 2.6), SIDEWALK_Y, 0);
-        dhaba.userData.propCategory = 'SIDEWALK_PROP';
-        dhaba.userData.expectedBaseY = SIDEWALK_Y;
-        chunk.add(dhaba);
-      } else {
-        const paanShop = createModularPaanShop(chunkIndex % 4);
-        paanShop.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-        paanShop.position.set(side * (roadW / 2 + 2.2), SIDEWALK_Y, 0);
-        paanShop.userData.propCategory = 'SIDEWALK_PROP';
-        paanShop.userData.expectedBaseY = SIDEWALK_Y;
-        chunk.add(paanShop);
-      }
-
-      // Rear Building (Z = +16) anchored at exact ROAD_Y (0)
-      const bStyle2 = (bStyle1 + 2) % 5;
-      const b2 = createCityBuilding(bStyle2);
-      b2.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-      b2.position.set(side * (roadW / 2 + 3.8), ROAD_Y, 16);
-      b2.userData.propCategory = 'BUILDING';
-      b2.userData.expectedBaseY = ROAD_Y;
-      chunk.add(b2);
+      // Multi-Layer Skyline Buildings behind & between shop rows (Near, Mid & Far LOD layers from buildings.js)
+      const buildingCluster = BuildingManager.generate(zPos, side, chunkIndex);
+      chunk.add(buildingCluster);
 
       // Ambient Walking Pedestrians along sidewalk path at exact SIDEWALK_Y
       for (let p = 0; p < 2; p++) {
@@ -981,6 +1252,13 @@ export class SubwayRickshawEngine {
       arch.userData.propCategory = 'ARCH';
       arch.userData.expectedBaseY = ROAD_Y;
       chunk.add(arch);
+    } else if (!getFlyoverSpanAtZ(zPos)) {
+      // Festive Overhead Fairy-Light & Bunting Garland spanning between lampposts
+      const garland = createFestiveLightGarland(roadW);
+      garland.position.set(0, ROAD_Y, 0);
+      garland.userData.propCategory = 'ARCH';
+      garland.userData.expectedBaseY = ROAD_Y;
+      chunk.add(garland);
     }
 
     patchObjectHierarchy(chunk);
@@ -1052,17 +1330,8 @@ export class SubwayRickshawEngine {
   private spawnSingleCoin(x: number, y: number, z: number, level: 0 | 1 = 0) {
     let coin = this.coinPool.find((c) => !c.visible);
     if (!coin) {
-      const coinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 16);
-      coinGeo.rotateX(Math.PI / 2);
-      const coinMat = createGameMaterial({
-        color: 0xfacc15,
-        emissive: 0xd97706,
-        emissiveIntensity: 0.48,
-        metalness: 0.75,
-        roughness: 0.22
-      });
-      coin = new THREE.Mesh(coinGeo, coinMat);
-      coin.frustumCulled = false;
+      coin = new THREE.Mesh(this.sharedCoinGeo!, this.sharedCoinMat!);
+      coin.frustumCulled = true;
       this.coinPool.push(coin);
       this.scene.add(coin);
     }
@@ -1170,7 +1439,7 @@ export class SubwayRickshawEngine {
       return;
     }
 
-    // 3. Standard Ground Pattern Spawning (when not in a flyover creation chunk)
+    // 3. PERF (Stage 3): Spread Ground Pattern Spawning over several frames (1 piece per frame via pendingSpawnQueue)
     const pattern = selectPattern(chunkDist, this.speed);
     let spawnedPowerupInChunk = false;
 
@@ -1181,7 +1450,7 @@ export class SubwayRickshawEngine {
         if (spawnedPowerupInChunk) continue;
         spawnedPowerupInChunk = true;
       }
-      this.spawnPatternElement(el, laneX, zPos, 0);
+      this.pendingSpawnQueue.push({ el, laneX, zPos, level: 0 });
     }
 
     // 4. Guaranteed Fuel Safety-Net Rule: Place a Fuel pickup whenever projected gauge falls below ~35% within 250m
@@ -1197,15 +1466,15 @@ export class SubwayRickshawEngine {
       this.shortcutZStart = chunkZ;
       this.shortcutZEnd = chunkZ - GAME_CONFIG.SHORTCUT_LENGTH;
 
-      const sign = createShortcutSign();
+      // PERF: Pool shortcut sign
+      const sign = this.acquirePooledObstacle('SHORTCUT_SIGN', () => createShortcutSign());
       sign.position.set(0, ROAD_Y, chunkZ);
-      sign.userData = {
+      Object.assign(sign.userData, {
         type: 'SHORTCUT_SIGN',
         level: 0,
         expectedBaseY: ROAD_Y,
         active: true
-      };
-      this.scene.add(sign);
+      });
       this.activeObstacles.push(sign);
 
       this.spawnCoinsOnLane(GAME_CONFIG.SHORTCUT_LANES[0], chunkZ - 45, 8, 0);
@@ -1217,6 +1486,17 @@ export class SubwayRickshawEngine {
     if (!this.isMysteryActive && Math.random() < 0.14) {
       const openLane = GAME_CONFIG.LANES[Math.floor(Math.random() * 3)];
       this.spawnMysteryBoxPickup(openLane, chunkZ - 8);
+    }
+  }
+
+  private pendingSpawnQueue: { el: PatternElement; laneX: number; zPos: number; level: 0 | 1 }[] = [];
+
+  // PERF (Stage 3): Process 1 queued spawn piece per frame so chunk recycling never spikes frame time
+  private processPendingSpawnSlice() {
+    const slices = PERF_CONFIG.CHUNK_PIECES_PER_FRAME;
+    for (let s = 0; s < slices && this.pendingSpawnQueue.length > 0; s++) {
+      const item = this.pendingSpawnQueue.shift()!;
+      this.spawnPatternElement(item.el, item.laneX, item.zPos, item.level);
     }
   }
 
@@ -1256,13 +1536,12 @@ export class SubwayRickshawEngine {
 
   // Object-Pooled AI Traffic Car with PID Following Controller & Blinkers
   private spawnAICar(laneX: number, zPos: number, level: 0 | 1 = 0) {
+    // PERF (Stage 3): Enforce fixed active vehicle cap from PERF_CONFIG
+    if (this.activeAITraffic.length >= PERF_CONFIG.MAX_ACTIVE_VEHICLES) return;
     let car = this.carPool.find((c) => !c.visible);
-    if (!car) {
-      const carTypes: CarType[] = ['HATCHBACK', 'SEDAN', 'SUV'];
-      car = createTrafficCar(carTypes[Math.floor(Math.random() * carTypes.length)]);
-      patchObjectHierarchy(car);
-      this.carPool.push(car);
-      this.scene.add(car);
+    if (!car) return; // Fixed pool cap reached
+    if (car.userData.debugGroup) {
+      car.userData.debugGroup.visible = this.debugBoundingBoxes;
     }
 
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
@@ -1304,14 +1583,10 @@ export class SubwayRickshawEngine {
 
   // Object-Pooled AI Rickshaw with PID Controller, Blinkers, and authentic 3-wheel handling
   private spawnAIRickshaw(laneX: number, zPos: number, level: 0 | 1 = 0) {
+    // PERF (Stage 3): Enforce fixed active vehicle cap from PERF_CONFIG
+    if (this.activeAITraffic.length >= PERF_CONFIG.MAX_ACTIVE_VEHICLES) return;
     let r = this.aiRickshawPool.find((item) => !item.visible);
-    if (!r) {
-      r = createDetailedRickshaw();
-      r.userData.isAIRickshaw = true;
-      patchObjectHierarchy(r);
-      this.aiRickshawPool.push(r);
-      this.scene.add(r);
-    }
+    if (!r) return;
 
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
     const currentLaneIdx = GAME_CONFIG.LANES.indexOf(laneX);
@@ -1352,13 +1627,10 @@ export class SubwayRickshawEngine {
 
   // Object-Pooled Pakistani 70cc / 125cc Motorbike with PID & Nimble Lane Weaving
   private spawnCivilianMotorbike(laneX: number, zPos: number, level: 0 | 1 = 0) {
+    // PERF (Stage 3): Enforce fixed active vehicle cap from PERF_CONFIG
+    if (this.activeAITraffic.length >= PERF_CONFIG.MAX_ACTIVE_VEHICLES) return;
     let b = this.motorbikePool.find((item) => !item.visible);
-    if (!b) {
-      b = createCivilianMotorbike();
-      patchObjectHierarchy(b);
-      this.motorbikePool.push(b);
-      this.scene.add(b);
-    }
+    if (!b) return;
 
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
     const currentLaneIdx = GAME_CONFIG.LANES.indexOf(laneX);
@@ -1398,17 +1670,18 @@ export class SubwayRickshawEngine {
   }
 
   private spawnElectricTowerAtLane(laneIdx: number, zPos: number) {
-    const tower = createElectricTransmissionTower();
+    // PERF (Stage 3): Pool electric transmission tower instead of creating/disposing per spawn
+    const tower = this.acquirePooledObstacle('ELECTRIC_TOWER', () => createElectricTransmissionTower());
     const laneX = GAME_CONFIG.LANES[laneIdx];
     tower.position.set(laneX, ROAD_Y, zPos);
-    tower.userData = {
+    Object.assign(tower.userData, {
       type: 'ELECTRIC_TOWER',
       laneX: laneX,
       level: 0,
       expectedBaseY: ROAD_Y,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(tower);
+    });
     this.activeObstacles.push(tower);
 
     // Coins on adjacent open lanes
@@ -1422,23 +1695,25 @@ export class SubwayRickshawEngine {
   }
 
   private spawnBus(laneX: number, zPos: number, isMetro = false) {
-    const bus = createTransportBus(isMetro);
+    // PERF (Stage 3): Pool transport bus
+    const bus = this.acquirePooledObstacle(isMetro ? 'BUS_METRO' : 'BUS_CLASSIC', () => createTransportBus(isMetro));
     bus.position.set(laneX, ROAD_Y, zPos);
-    bus.userData = {
+    Object.assign(bus.userData, {
       type: 'BUS',
       laneX: laneX,
       level: 0,
       expectedBaseY: ROAD_Y,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(bus);
+    });
     this.activeObstacles.push(bus);
   }
 
   private spawnBusWithRamp(laneX: number, zPos: number, isMetro = false) {
-    const bus = createBusWithRamp(isMetro);
+    // PERF (Stage 3): Pool bus with ascending ramp
+    const bus = this.acquirePooledObstacle(isMetro ? 'BUS_RAMP_METRO' : 'BUS_RAMP_CLASSIC', () => createBusWithRamp(isMetro));
     bus.position.set(laneX, ROAD_Y, zPos);
-    bus.userData = {
+    Object.assign(bus.userData, {
       type: 'BUS_RAMP',
       laneX: laneX,
       roofHeight: BUS_ROOF_HEIGHT,
@@ -1446,9 +1721,9 @@ export class SubwayRickshawEngine {
       rampHighOffsetZ: BUS_RAMP_HIGH_OFFSET_Z,
       level: 0,
       expectedBaseY: ROAD_Y,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(bus);
+    });
     this.activeObstacles.push(bus);
 
     // Sync active bus ramps immediately so groundHeightAt() includes this bus ramp right away
@@ -1463,7 +1738,8 @@ export class SubwayRickshawEngine {
   }
 
   private spawnCrossingCat(laneX: number, zPos: number) {
-    const cat = createStrayCat();
+    if (this.activePedestrians.length >= PERF_CONFIG.MAX_ACTIVE_NPCS) return;
+    const cat = this.acquirePooledObstacle('CROSSING_CAT', () => createStrayCat());
     cat.position.set(laneX, ROAD_Y, zPos);
     cat.userData.level = 0;
     cat.userData.expectedBaseY = ROAD_Y;
@@ -1471,12 +1747,12 @@ export class SubwayRickshawEngine {
     cat.userData.crossDir = Math.random() < 0.5 ? -1 : 1;
     cat.userData.crossSpeed = 2.0 + Math.random() * 1.5;
     cat.rotation.y = cat.userData.crossDir > 0 ? Math.PI / 2 : -Math.PI / 2;
-    this.scene.add(cat);
     this.activePedestrians.push(cat);
   }
 
   private spawnCrossingPedestrian(laneX: number, zPos: number) {
-    const ped = createCrossingPedestrian(Math.random() < 0.5 ? 0x059669 : 0xd97706);
+    if (this.activePedestrians.length >= PERF_CONFIG.MAX_ACTIVE_NPCS) return;
+    const ped = this.acquirePooledObstacle('CROSSING_PED', () => createCrossingPedestrian(0x059669));
     ped.position.set(laneX, ROAD_Y, zPos);
     ped.userData.level = 0;
     ped.userData.expectedBaseY = ROAD_Y;
@@ -1484,104 +1760,110 @@ export class SubwayRickshawEngine {
     ped.userData.crossDir = Math.random() < 0.5 ? -1 : 1;
     ped.userData.crossSpeed = 1.2 + Math.random() * 1.0;
     ped.rotation.y = ped.userData.crossDir > 0 ? Math.PI / 2 : -Math.PI / 2;
-    this.scene.add(ped);
     this.activePedestrians.push(ped);
   }
 
   private spawnFruitCart(laneX: number, zPos: number, level: 0 | 1 = 0) {
-    const cart = createFruitCart();
+    const cart = this.acquirePooledObstacle('FRUIT_CART', () => createFruitCart());
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
     cart.position.set(laneX, baseY, zPos);
-    cart.userData = {
+    Object.assign(cart.userData, {
       type: 'FRUIT_CART',
       laneX: laneX,
       level,
       expectedBaseY: baseY,
       isStunned: false,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(cart);
+    });
     this.activeObstacles.push(cart);
   }
 
   private spawnBedfordTruck(laneX: number, zPos: number) {
-    const truck = createBedfordTruck();
+    const truck = this.acquirePooledObstacle('BEDFORD_TRUCK', () => createBedfordTruck());
     truck.position.set(laneX, ROAD_Y, zPos);
-    truck.userData = {
+    Object.assign(truck.userData, {
       type: 'BEDFORD_TRUCK',
       laneX: laneX,
       level: 0,
       expectedBaseY: ROAD_Y,
       speed: 10 + Math.random() * 5,
       honkTimer: 4 + Math.random() * 8,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(truck);
+    });
     this.activeObstacles.push(truck);
   }
 
   private spawnSahiwalCow(laneX: number, zPos: number) {
-    const cow = createSahiwalCow();
+    const cow = this.acquirePooledObstacle('SAHIWAL_COW', () => createSahiwalCow());
     cow.position.set(laneX, ROAD_Y, zPos);
-    cow.userData = {
+    Object.assign(cow.userData, {
       type: 'SAHIWAL_COW',
       laneX: laneX,
       level: 0,
       expectedBaseY: ROAD_Y,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(cow);
+    });
     this.activeObstacles.push(cow);
   }
 
   private spawnHurdle(laneX: number, zPos: number, level: 0 | 1 = 0) {
-    const group = createRoadHurdle();
+    const group = this.acquirePooledObstacle('HURDLE', () => createRoadHurdle());
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
     group.position.set(laneX, baseY, zPos);
-    group.userData = {
+    Object.assign(group.userData, {
       type: 'HURDLE',
       laneX,
       level,
       expectedBaseY: baseY,
       canJumpOver: true,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(group);
+    });
     this.activeObstacles.push(group);
   }
 
   private spawnLowOverheadBeam(laneX: number, zPos: number, level: 0 | 1 = 0) {
-    const group = new THREE.Group();
+    // PERF (Stage 2 & 3): Pool overhead low beam using shared geometries & materials
+    const group = this.acquirePooledObstacle('LOW_BEAM', () => {
+      const g = new THREE.Group();
+      const postMat = createGameMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.35 });
+      const beamMat = createGameMaterial({ color: 0xf59e0b, roughness: 0.35 });
+      const postGeo = new THREE.CylinderGeometry(0.08, 0.1, 2.2, 8);
+      const crossbarGeo = new THREE.BoxGeometry(2.7, 0.36, 0.28);
+
+      [-1.25, 1.25].forEach((px) => {
+        const post = new THREE.Mesh(postGeo, postMat);
+        post.position.set(px, 1.1, 0);
+        post.frustumCulled = true;
+        post.matrixAutoUpdate = false;
+        post.updateMatrix();
+        g.add(post);
+      });
+
+      const crossbar = new THREE.Mesh(crossbarGeo, beamMat);
+      crossbar.position.set(0, 2.02, 0);
+      crossbar.frustumCulled = true;
+      crossbar.matrixAutoUpdate = false;
+      crossbar.updateMatrix();
+      g.add(crossbar);
+
+      g.add(createBlobShadow(2.6, 0.8, 0.38));
+      return g;
+    });
     const baseY = level === 1 ? groundHeightAt(laneX, zPos, 1) : ROAD_Y;
     group.position.set(laneX, baseY, zPos);
-
-    const postMat = createGameMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.35 });
-    const beamMat = createGameMaterial({ color: 0xf59e0b, roughness: 0.35 });
-
-    [-1.25, 1.25].forEach((px) => {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.2, 8), postMat);
-      post.position.set(px, 1.1, 0);
-      post.frustumCulled = false;
-      group.add(post);
-    });
-
-    const crossbar = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.36, 0.28), beamMat);
-    crossbar.position.set(0, 2.02, 0);
-    crossbar.frustumCulled = false;
-    group.add(crossbar);
-
-    group.add(createBlobShadow(2.6, 0.8, 0.38));
-    patchObjectHierarchy(group);
-
-    group.userData = {
+    Object.assign(group.userData, {
       type: 'LOW_BEAM',
       laneX,
       level,
       expectedBaseY: baseY,
       canSlideUnder: true,
+      nearMissAwarded: false,
       active: true
-    };
-    this.scene.add(group);
+    });
     this.activeObstacles.push(group);
   }
 
@@ -1623,54 +1905,47 @@ export class SubwayRickshawEngine {
       }
     }
 
-    // Magnet, Jetpack, & Multiplier coin-line powerups remain unaffected (curve-patched)
+    // PERF (Stage 2 & 3): Pool Magnet, Jetpack & Multiplier powerups with low-poly 8-segment geometries
     const fallbackTypes: PowerupType[] = ['MAGNET', 'JETPACK', 'MULTIPLIER'];
     const type = explicitType && fallbackTypes.includes(explicitType)
       ? explicitType
       : fallbackTypes[Math.floor(Math.random() * fallbackTypes.length)];
 
-    const group = new THREE.Group();
+    const group = this.acquirePooledObstacle(`POWERUP_${type}`, () => {
+      const g = new THREE.Group();
+      if (type === 'MAGNET') {
+        const horseshoe = new THREE.Mesh(
+          new THREE.TorusGeometry(0.4, 0.12, 6, 8, Math.PI),
+          createGameMaterial({ color: 0xef4444, metalness: 0.8 })
+        );
+        horseshoe.rotation.z = Math.PI;
+        g.add(horseshoe);
+      } else if (type === 'JETPACK') {
+        const rocket = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.18, 0.2, 0.7, 8),
+          createGameMaterial({ color: 0x0284c7, metalness: 0.8 })
+        );
+        g.add(rocket);
+      } else {
+        const star = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.45),
+          createGameMaterial({ color: 0x8b5cf6, metalness: 0.7 })
+        );
+        g.add(star);
+      }
+      return g;
+    });
     group.position.set(laneX, baseY + 1.0, zPos);
-
-    if (type === 'MAGNET') {
-      const horseshoe = new THREE.Mesh(
-        new THREE.TorusGeometry(0.4, 0.12, 8, 16, Math.PI),
-        createGameMaterial({ color: 0xef4444, metalness: 0.8 })
-      );
-      horseshoe.rotation.z = Math.PI;
-      group.add(horseshoe);
-    } else if (type === 'JETPACK') {
-      const rocket = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.2, 0.7, 12),
-        createGameMaterial({ color: 0x0284c7, metalness: 0.8 })
-      );
-      group.add(rocket);
-    } else {
-      const star = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.45),
-        createGameMaterial({ color: 0x8b5cf6, metalness: 0.7 })
-      );
-      group.add(star);
-    }
-
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.65, 12, 12),
-      createGameMaterial({ kind: 'basic', color: 0x38bdf8, transparent: true, opacity: 0.3, wireframe: true })
-    );
-    group.add(glow);
-
-    patchObjectHierarchy(group);
-    group.userData = { type, level, baseY, active: true };
-    this.scene.add(group);
+    Object.assign(group.userData, { type, level, baseY, active: true });
     this.activePowerups.push(group);
   }
 
   private spawnMysteryBoxPickup(laneX: number, zPos: number) {
-    const box = createMysteryBox();
+    // PERF (Stage 3): Pool mystery box pickup
+    const box = this.acquirePooledObstacle('MYSTERY_BOX', () => createMysteryBox());
     box.position.set(laneX, ROAD_Y + 1.1, zPos);
     box.userData.level = 0;
-    patchObjectHierarchy(box);
-    this.scene.add(box);
+    box.userData.isMysteryBox = true;
     this.activePowerups.push(box);
   }
 
@@ -1760,6 +2035,9 @@ export class SubwayRickshawEngine {
     if (this.hornCooldown > 0) return false;
     this.hornCooldown = 3.0; // 3-second cooldown
     this.sound.playHorn();
+    if (this.npcManager) {
+      this.npcManager.onHorn(this.rickshaw.position);
+    }
 
     const pZ = this.rickshaw.position.z;
 
@@ -1793,13 +2071,63 @@ export class SubwayRickshawEngine {
           obs.userData.isStunned = true;
           this.coins += 25 * this.scoreMultiplier;
           this.totalRupees += 25;
+          this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 20);
           this.sound.playCoin();
-          this.emitToast('🥭 MANGO VENDOR STUNNED BY HORN! +25 RUPEES (+150 PTS)!');
+          this.emitToast('🥭 MANGO VENDOR STUNNED BY HORN! +25 PKR & +20% CHAI NITRO!');
           break;
         }
       }
     }
 
+    // 4. Open Roadside Dhaba & Paan Shop Horn-Order Express Delivery!
+    if (this.verticalLevel === 0) {
+      for (const chunk of this.roadChunks) {
+        const distZ = Math.abs(chunk.position.z - pZ);
+        if (distZ < 24 && !chunk.userData.shopOrderServedThisPass) {
+          chunk.userData.shopOrderServedThisPass = true;
+          this.roadsideOrdersServed++;
+          const tip = 30 * this.scoreMultiplier;
+          this.coins += tip;
+          this.totalRupees += tip;
+          this.fuel = Math.min(GAME_CONFIG.FUEL_MAX, this.fuel + 18);
+          this.cngFuel = this.fuel;
+          this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 35);
+          this.sound.playCoin();
+          this.spawnPickupBurst(this.rickshaw.position, 0xfacc15, 22);
+          this.emitToast(`☕ OPEN DHABA CHAI EXPRESS ORDER! +${tip} PKR, +18% FUEL & +35% NITRO!`);
+          this.notifyStats();
+          break;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Unleashes Chai Nitro Overdrive when chaiNitroCharge >= 50%:
+   * - 1.38x Turbo Speed
+   * - Zero Fuel Drain
+   * - Smashes through road hazards & traffic with golden-cyan spark trails
+   */
+  public activateChaiNitro(forceFree = false): boolean {
+    if (this.state !== 'RUNNING') return false;
+    if (!forceFree && this.chaiNitroCharge < 50) {
+      this.emitToast(`☕ NEED 50% CHAI NITRO! (CURRENT: ${Math.round(this.chaiNitroCharge)}%) — HONK AT OPEN SHOPS!`);
+      return false;
+    }
+    const duration = forceFree ? 6.5 : 3.5 + (this.chaiNitroCharge / 100) * 3.5;
+    if (!forceFree) {
+      this.chaiNitroCharge = 0;
+    }
+    this.isNitroActive = true;
+    this.nitroTimer = Math.max(this.nitroTimer, duration);
+    this.fuelNoDrainTimer = Math.max(this.fuelNoDrainTimer, duration);
+    this.sound.playSpeedUp();
+    this.triggerScreenFlash('#facc15', 0.22);
+    this.spawnPickupBurst(this.rickshaw.position, 0xfacc15, 28);
+    this.emitToast(`🔥 KARAK CHAI NITRO OVERDRIVE! (${duration.toFixed(1)}s TURBO + SMASH + ZERO FUEL DRAIN!)`);
+    this.notifyStats();
     return true;
   }
 
@@ -1911,6 +2239,12 @@ export class SubwayRickshawEngine {
     if (this.upgrades.starterShield > 0) {
       this.activateShield(this.upgrades.starterShield >= 2 ? 'SHIELD_DOUBLE' : 'SHIELD_STANDARD');
     }
+    if ((this.upgrades.chaiHeadstartCount || 0) > 0) {
+      this.upgrades.chaiHeadstartCount = (this.upgrades.chaiHeadstartCount || 1) - 1;
+      localStorage.setItem('rickshaw_upgrades', JSON.stringify(this.upgrades));
+      this.chaiNitroCharge = 100;
+      this.activateChaiNitro(true);
+    }
     this.notifyStats();
   }
 
@@ -1948,6 +2282,14 @@ export class SubwayRickshawEngine {
     this.fuelNoDrainTimer = 0;
     this.fuelEmptyTimer = 0;
     this.stallSpeedFactor = 1.0;
+    this.chaiNitroCharge = 35;
+    this.isNitroActive = false;
+    this.nitroTimer = 0;
+    this.roadsideOrdersServed = 0;
+    this.currentDistrict = 'Saddar & Empress Mkt';
+    this.currentDistrictIndex = 0;
+    this.streakCount = 0;
+    this.streakTimer = 0;
 
     this.hasShield = false;
     this.shieldVariant = null;
@@ -2006,7 +2348,8 @@ export class SubwayRickshawEngine {
       this.policeChase.reset(0);
     }
 
-    // Reset Pools
+    // PERF (Stage 3): Recycle all pooled objects instead of disposing/destroying them
+    this.pendingSpawnQueue = [];
     this.carPool.forEach((c) => (c.visible = false));
     this.aiRickshawPool.forEach((r) => (r.visible = false));
     this.motorbikePool.forEach((b) => (b.visible = false));
@@ -2016,37 +2359,68 @@ export class SubwayRickshawEngine {
     this.activeCoins = [];
 
     this.activeObstacles.forEach((o) => {
-      this.disposeObjectHierarchy(o);
-      this.scene.remove(o);
+      this.releasePooledObstacle(o);
     });
     this.activeObstacles = [];
 
     this.activePedestrians.forEach((p) => {
       if (!p.parent || p.parent === this.scene) {
-        this.disposeObjectHierarchy(p);
-        this.scene.remove(p);
+        this.releasePooledObstacle(p);
       }
     });
     this.activePedestrians = [];
 
     this.activePowerups.forEach((p) => {
-      this.disposeObjectHierarchy(p);
-      this.scene.remove(p);
+      this.releasePooledObstacle(p);
     });
     this.activePowerups = [];
 
-    this.activePuddles = [];
     this.puffPool.forEach((p) => (p.visible = false));
     this.sparklePool.forEach((s) => (s.visible = false));
     this.particles = [];
 
-    this.roadChunks.forEach((ch) => this.scene.remove(ch));
-    this.roadChunks = [];
-
-    this.initWorld();
+    // PERF (Stage 3): Reuse existing roadChunks pool in-place instead of destroying and rebuilding
+    if (this.roadChunks.length === GAME_CONFIG.ACTIVE_CHUNKS) {
+      this.nextChunkIndex = 0;
+      this.originZOffset = 0;
+      for (let i = 0; i < this.roadChunks.length; i++) {
+        const ch = this.roadChunks[i];
+        const zPos = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH;
+        ch.position.set(0, ROAD_Y, zPos);
+        ch.userData.chunkIndex = this.nextChunkIndex;
+        ch.userData.shopOrderServedThisPass = false;
+        if (Math.abs(zPos) > 40) {
+          this.populateChunkContent(zPos, this.nextChunkIndex);
+        }
+        this.nextChunkIndex++;
+      }
+      this.nextSpawnZ = -this.nextChunkIndex * GAME_CONFIG.CHUNK_LENGTH;
+      for (let p = 0; p < this.activePuddles.length; p++) {
+        this.activePuddles[p].puddle.userData.splashedThisPass = false;
+      }
+      // Keep sidewalk pedestrians inside pooled chunks registered in activePedestrians
+      for (const ch of this.roadChunks) {
+        for (const child of ch.children) {
+          if (child.userData && child.userData.walkPhase !== undefined) {
+            this.activePedestrians.push(child as THREE.Group);
+          }
+        }
+      }
+    } else {
+      this.activePuddles = [];
+      this.roadChunks.forEach((ch) => this.scene.remove(ch));
+      this.roadChunks = [];
+      this.initWorld();
+    }
 
     if (this.upgrades.starterShield > 0) {
       this.activateShield(this.upgrades.starterShield >= 2 ? 'SHIELD_DOUBLE' : 'SHIELD_STANDARD');
+    }
+    if ((this.upgrades.chaiHeadstartCount || 0) > 0) {
+      this.upgrades.chaiHeadstartCount = (this.upgrades.chaiHeadstartCount || 1) - 1;
+      localStorage.setItem('rickshaw_upgrades', JSON.stringify(this.upgrades));
+      this.chaiNitroCharge = 100;
+      this.activateChaiNitro(true);
     }
 
     this.notifyStats();
@@ -2078,9 +2452,26 @@ export class SubwayRickshawEngine {
     if (this.state === 'GAMEOVER') return;
     if (this.invulnerabilityTimer > 0) return;
 
-    if (this.isMysteryActive && this.mysteryVehicle === 'tractor') {
+    if (this.isNitroActive || (this.isMysteryActive && (this.mysteryVehicle === 'tractor' || this.mysteryVehicle === 'hulk'))) {
       this.sound.playCrash();
-      this.emitToast('🚜 TRACTOR SMASHED THROUGH HAZARD!');
+      if (hitObstacle) {
+        hitObstacle.position.y += 5;
+        hitObstacle.position.z += 10;
+        hitObstacle.rotation.x += 1.5;
+      }
+      this.emitToast(
+        this.isNitroActive
+          ? '🔥 CHAI NITRO BLASTED THROUGH HAZARD!'
+          : this.mysteryVehicle === 'hulk'
+          ? '💥 HULK SMASHED HAZARD!'
+          : '🚜 TRACTOR SMASHED THROUGH HAZARD!'
+      );
+      return;
+    }
+
+    if (this.vehicleDef.id === 'captain_america' && (reason.includes('Mango Cart') || reason.includes('Hurdle') || reason.includes('Barrier'))) {
+      this.sound.playCrash();
+      this.emitToast('🛡️ VIBRANIUM SHIELD DEFLECTED HAZARD! NO DAMAGE!');
       return;
     }
 
@@ -2111,9 +2502,20 @@ export class SubwayRickshawEngine {
     if (this.state === 'GAMEOVER') return;
     if (this.invulnerabilityTimer > 0) return;
 
-    if (this.isMysteryActive && this.mysteryVehicle === 'tractor') {
+    if (this.isNitroActive || (this.isMysteryActive && (this.mysteryVehicle === 'tractor' || this.mysteryVehicle === 'hulk'))) {
       this.sound.playCrash();
-      this.emitToast('🚜 TRACTOR SMASHED THROUGH COLLISION!');
+      if (hitObstacle) {
+        hitObstacle.position.y += 6;
+        hitObstacle.position.z += 12;
+        hitObstacle.rotation.x += 1.8;
+      }
+      this.emitToast(
+        this.isNitroActive
+          ? '🔥 CHAI NITRO OVERDRIVE SMASHED THROUGH TRAFFIC!'
+          : this.mysteryVehicle === 'hulk'
+          ? '💥 HULK SMASHED THROUGH COLLISION!'
+          : '🚜 TRACTOR SMASHED THROUGH COLLISION!'
+      );
       return;
     }
 
@@ -2121,11 +2523,34 @@ export class SubwayRickshawEngine {
       return;
     }
 
-    if (this.vehicleDef.id === 'truck' && !this.truckShieldUsed) {
-      this.truckShieldUsed = true;
-      this.invulnerabilityTimer = 1.0;
+    if ((this.upgrades.wardenBribeCount || 0) > 0) {
+      this.upgrades.wardenBribeCount = (this.upgrades.wardenBribeCount || 1) - 1;
+      localStorage.setItem('rickshaw_upgrades', JSON.stringify(this.upgrades));
+      this.invulnerabilityTimer = 1.8;
+      if (this.policeChase) {
+        this.policeChase.state = 'SAFE';
+        this.policeChase.gap = GAME_CONFIG.POLICE_GAP_SAFE;
+      }
       this.sound.playShieldShatter();
-      this.emitToast('🚚 BEDFORD TRUCK SMASHED CRASH! (1/1 ARMOR SAVED RUN)');
+      this.triggerScreenFlash('#22c55e', 0.25);
+      if (hitObstacle) {
+        hitObstacle.visible = false;
+        hitObstacle.position.z += 500;
+      }
+      this.emitToast(`👮 VIP WARDEN PASS USED! CHALLAN WAIVED & RUN SAVED! (${this.upgrades.wardenBribeCount} LEFT)`);
+      this.notifyStats();
+      return;
+    }
+
+    if ((this.vehicleDef.id === 'captain_america' || this.vehicleDef.id === 'truck') && !this.truckShieldUsed) {
+      this.truckShieldUsed = true;
+      this.invulnerabilityTimer = 1.2;
+      this.sound.playShieldShatter();
+      this.emitToast(
+        this.vehicleDef.id === 'captain_america'
+          ? '🛡️ VIBRANIUM SHIELD ABSORBED FATAL IMPACT! (1/1 SAVED RUN)'
+          : '🚚 BEDFORD TRUCK SMASHED CRASH! (1/1 ARMOR SAVED RUN)'
+      );
       return;
     }
 
@@ -2155,49 +2580,33 @@ export class SubwayRickshawEngine {
   }
 
   private spawnCrashSparks(pos: THREE.Vector3) {
-    const sparkGeo = new THREE.BufferGeometry();
-    const count = 75;
-    const positions = new Float32Array(count * 3);
-    const velocities: THREE.Vector3[] = [];
-
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = pos.x;
-      positions[i * 3 + 1] = pos.y + 0.8;
-      positions[i * 3 + 2] = pos.z;
-      velocities.push(
-        new THREE.Vector3((Math.random() - 0.5) * 16, Math.random() * 14 + 3, (Math.random() - 0.5) * 16)
-      );
-    }
-    sparkGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const sparks = new THREE.Points(
-      sparkGeo,
-      createGameMaterial({ kind: 'points', color: 0x38bdf8, size: 0.35, transparent: true })
-    );
-    sparks.frustumCulled = false;
-    this.scene.add(sparks);
-    this.particles.push({ points: sparks, vels: velocities, life: 1.0, maxLife: 1.0 });
+    // PERF (Stage 2 & 3): Use pooled sparkle meshes instead of allocating new BufferGeometry/Material
+    this.spawnPickupBurst(pos, 0x38bdf8, 16);
   }
 
-  public spawnPickupBurst(pos: THREE.Vector3, colorHex: number, count = 18) {
-    const sparkGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    const velocities: THREE.Vector3[] = [];
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = pos.x;
-      positions[i * 3 + 1] = pos.y + 0.9;
-      positions[i * 3 + 2] = pos.z;
-      velocities.push(
-        new THREE.Vector3((Math.random() - 0.5) * 11, Math.random() * 9 + 2, (Math.random() - 0.5) * 11)
-      );
+  public spawnPickupBurst(pos: THREE.Vector3, _colorHex: number, count = 12) {
+    // PERF (Stage 2 & 3): Reuse pooled sparkle meshes with PERF_CONFIG.MAX_ACTIVE_PARTICLES cap
+    if (this.particles.length >= PERF_CONFIG.MAX_ACTIVE_PARTICLES) return;
+    let spawned = 0;
+    const maxToSpawn = Math.min(count, 10, PERF_CONFIG.MAX_ACTIVE_PARTICLES - this.particles.length);
+    for (let i = 0; i < this.sparklePool.length && spawned < maxToSpawn; i++) {
+      const sparkle = this.sparklePool[i];
+      if (!sparkle.visible) {
+        sparkle.position.set(pos.x, pos.y + 0.85, pos.z);
+        sparkle.scale.set(1, 1, 1);
+        sparkle.visible = true;
+        if (!sparkle.userData.vel) {
+          sparkle.userData.vel = new THREE.Vector3();
+        }
+        sparkle.userData.vel.set(
+          (Math.random() - 0.5) * 9,
+          Math.random() * 8 + 2,
+          (Math.random() - 0.5) * 9
+        );
+        this.particles.push({ mesh: sparkle, vel: sparkle.userData.vel, life: 0.45, maxLife: 0.45 });
+        spawned++;
+      }
     }
-    sparkGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const sparks = new THREE.Points(
-      sparkGeo,
-      createGameMaterial({ kind: 'points', color: colorHex, size: 0.28, transparent: true })
-    );
-    sparks.frustumCulled = false;
-    this.scene.add(sparks);
-    this.particles.push({ points: sparks, vels: velocities, life: 0.55, maxLife: 0.55 });
   }
 
   private animate() {
@@ -2217,9 +2626,77 @@ export class SubwayRickshawEngine {
       }
     }
 
+    if (this.isShowroomMode && this.showroomGroup) {
+      // Model Showroom inspection scene (all 8 VEHICLE_SPECS models lined up along X at z = 0)
+      const items = (this.showroomGroup.userData.items as { x: number; key: string; model: THREE.Group }[]) || [];
+      // Spin wheels and gentle suspension bounce on all showroom vehicles so wheel alignment can be visually checked
+      this.suspensionPhase += rawDelta * 6.0;
+      const showBounce = Math.sin(this.suspensionPhase) * 0.018;
+      for (const item of items) {
+        const m = item.model;
+        if (m.userData.wheels) {
+          const wRad = m.userData.wheelRadius || 0.35;
+          for (const w of m.userData.wheels as THREE.Group[]) {
+            w.rotation.x -= (4.0 * rawDelta) / wRad;
+          }
+        }
+        if (m.userData.bodyGroup) {
+          m.userData.bodyGroup.position.y = showBounce;
+        }
+      }
+
+      if (this.showroomFocusIndex >= 0 && this.showroomFocusIndex < items.length) {
+        const focusItem = items[this.showroomFocusIndex];
+        this.garageTurntableAngle += rawDelta * 0.45;
+        const radius = focusItem.key === 'bus' || focusItem.key === 'truck' ? 8.8 : 5.2;
+        const camX = focusItem.x + Math.sin(this.garageTurntableAngle) * radius;
+        const camZ = Math.cos(this.garageTurntableAngle) * radius;
+        this.camera.position.lerp(_scratchVec1.set(camX, 2.6, camZ), Math.min(1, rawDelta * 8));
+        this.camera.lookAt(focusItem.x, 1.2, 0);
+      } else {
+        // Full lineup overview of all 8 models
+        this.camera.position.lerp(_scratchVec1.set(0, 6.2, 19.5), Math.min(1, rawDelta * 6));
+        this.camera.lookAt(0, 1.4, 0);
+      }
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    if (this.isNPCGalleryOpen && this.npcManager) {
+      this.npcManager.update(rawDelta, {});
+      this.camera.position.lerp(_scratchVec1.set(0, 4.1, 8.8), Math.min(1, rawDelta * 6));
+      this.camera.lookAt(0, 1.0, 0.2);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    if (this.isShopGalleryOpen) {
+      updateShops(rawDelta);
+      this.camera.position.lerp(_scratchVec1.set(0, 5.2, 14.5), Math.min(1, rawDelta * 6));
+      this.camera.lookAt(0, 2.0, 0);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    if (this.isBuildingGalleryOpen) {
+      updateBuildings(rawDelta);
+      const camZ = this.buildingGalleryStage === 0 ? 32.0 : 24.0;
+      const camY = this.buildingGalleryStage === 0 ? 11.5 : 8.5;
+      this.camera.position.lerp(_scratchVec1.set(0, camY, camZ), Math.min(1, rawDelta * 6));
+      this.camera.lookAt(0, 5.2, -3.0);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
     if (this.isGarageMode) {
       // 360-degree interactive 3D inspection turntable for Garage & Shop
       this.garageTurntableAngle += rawDelta * 0.65;
+      if (this.rickshaw.userData.wheels) {
+        const wRad = this.rickshaw.userData.wheelRadius || 0.35;
+        for (const w of this.rickshaw.userData.wheels as THREE.Group[]) {
+          w.rotation.x -= (3.2 * rawDelta) / wRad;
+        }
+      }
       this.camera.position.set(
         Math.sin(this.garageTurntableAngle) * 4.6,
         2.0,
@@ -2262,6 +2739,8 @@ export class SubwayRickshawEngine {
     // 2. Visual & Environment Updates
     this.updateDayNightCycle(rawDelta);
     this.updateParticles(rawDelta);
+    updateShops(rawDelta);
+    updateBuildings(rawDelta);
 
     // Sky Group follows camera X and Z only (never Y!) so sky/horizon stays locked when jumping or climbing flyovers
     if (this.skyGroup) {
@@ -2352,16 +2831,69 @@ export class SubwayRickshawEngine {
       this.camera.lookAt(lookTargetX, lookTargetY, lookTargetZ);
     }
 
+    this.renderer.info.reset();
     this.renderer.render(this.scene, this.camera);
+
+    const now = performance.now();
+    const frameDeltaMs = rawDelta * 1000;
 
     // FPS calculation
     this.framesAccum++;
-    const now = performance.now();
     if (now - this.lastFpsTimestamp >= 1000) {
       this.fpsCount = Math.round((this.framesAccum * 1000) / (now - this.lastFpsTimestamp));
       this.framesAccum = 0;
       this.lastFpsTimestamp = now;
     }
+
+    // Stage 0 Telemetry & Leak / Frame-Spike Detection
+    const rInfo = this.renderer.info;
+    const memPerf = (performance as any).memory;
+    const jsHeapMB = memPerf && memPerf.usedJSHeapSize ? Math.round(memPerf.usedJSHeapSize / (1024 * 1024)) : null;
+    const activeNPCsCount =
+      this.activePedestrians.length + (this.npcManager && this.npcManager.active ? this.npcManager.active.length : 0);
+
+    // 1. Console warning if frame time exceeds 25 ms (throttled to at most once every 3s)
+    if (frameDeltaMs > 25 && now - this.lastPerfWarnTime > 3000 && this.state === 'RUNNING') {
+      this.lastPerfWarnTime = now;
+      console.warn(
+        `[Perf Stage 0] Frame time spike: ${frameDeltaMs.toFixed(1)} ms (${this.fpsCount} FPS) | Draw calls: ${rInfo.render.calls} | Triangles: ${rInfo.render.triangles} | Geometries: ${rInfo.memory.geometries} | Textures: ${rInfo.memory.textures}`
+      );
+    }
+
+    // 2. Geometry / Texture Leak Detector (checks every 4 seconds during active play)
+    if (this.state === 'RUNNING' && now - this.lastLeakSampleTime >= 4000) {
+      this.lastLeakSampleTime = now;
+      const curGeos = rInfo.memory.geometries;
+      const curTexs = rInfo.memory.textures;
+      if (this.prevGeometriesCount > 0 && (curGeos > this.prevGeometriesCount + 8 || curTexs > this.prevTexturesCount + 4)) {
+        this.leakGrowthStreak++;
+        if (this.leakGrowthStreak >= 3) {
+          this.perfMetrics.leakWarning = true;
+          console.warn(
+            `[Perf Stage 0 LEAK WARNING] GPU resource count kept growing over 3 samples! Geometries: ${this.prevGeometriesCount} -> ${curGeos}, Textures: ${this.prevTexturesCount} -> ${curTexs}`
+          );
+        }
+      } else {
+        this.leakGrowthStreak = Math.max(0, this.leakGrowthStreak - 1);
+      }
+      this.prevGeometriesCount = curGeos;
+      this.prevTexturesCount = curTexs;
+    }
+
+    this.perfMetrics = {
+      fps: this.fpsCount,
+      frameTimeMs: Number(frameDeltaMs.toFixed(1)),
+      drawCalls: rInfo.render.calls,
+      triangles: rInfo.render.triangles,
+      geometries: rInfo.memory.geometries,
+      textures: rInfo.memory.textures,
+      jsHeapMB,
+      activeNPCs: activeNPCsCount,
+      activeVehicles: this.activeAITraffic.length,
+      activeProps: this.activeObstacles.length + this.roadChunks.length,
+      activeParticles: this.particles.length,
+      leakWarning: this.perfMetrics.leakWarning
+    };
 
     // 3. Stop per-frame React updates: push to HUD store at ~10 Hz (every 100ms)
     this.hudUpdateTimer += rawDelta;
@@ -2371,7 +2903,6 @@ export class SubwayRickshawEngine {
     }
 
     // 4. Adaptive Quality: monitor actual frame-to-frame delta time (ms)
-    const frameDeltaMs = rawDelta * 1000;
     this.frameTimes.push(frameDeltaMs);
     if (this.frameTimes.length >= 60) {
       const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -2411,7 +2942,8 @@ export class SubwayRickshawEngine {
   private downgradeQuality() {
     if (this.currentQualityScale > 0.6) {
       this.currentQualityScale = Math.max(0.6, this.currentQualityScale - 0.2);
-      const baseDpr = Math.min(window.devicePixelRatio, 1.5);
+      const maxDpr = this.isMobile ? 1.15 : 1.5;
+      const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
       this.renderer.setPixelRatio(baseDpr * this.currentQualityScale);
       if (this.currentQualityScale <= 0.7) {
         this.adaptiveTier = 'LOW';
@@ -2425,7 +2957,8 @@ export class SubwayRickshawEngine {
   private upgradeQuality() {
     if (this.currentQualityScale < 1.0) {
       this.currentQualityScale = Math.min(1.0, this.currentQualityScale + 0.2);
-      const baseDpr = Math.min(window.devicePixelRatio, 1.5);
+      const maxDpr = this.isMobile ? 1.15 : 1.5;
+      const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
       this.renderer.setPixelRatio(baseDpr * this.currentQualityScale);
       if (this.currentQualityScale >= 1.0) {
         this.adaptiveTier = 'HIGH';
@@ -2442,6 +2975,8 @@ export class SubwayRickshawEngine {
 
     if (this.weather === 'MONSOON') {
       this.timeOfDayLabel = 'Monsoon Rain';
+      setNight(false);
+      setBuildingNight(false);
       const fogColor = 0x334155;
       const sunIntensity = 0.4 * underpassShadeMult;
       const ambientIntensity = 0.75 * underpassShadeMult;
@@ -2450,7 +2985,7 @@ export class SubwayRickshawEngine {
         (this.scene.fog as THREE.Fog).color.setHex(fogColor);
       }
       this.sunLight.intensity = THREE.MathUtils.lerp(this.sunLight.intensity, sunIntensity, delta * 3);
-      this.ambientLight.intensity = THREE.MathUtils.lerp(this.ambientLight.intensity, ambientIntensity, delta * 3);
+      this.hemiLight.intensity = THREE.MathUtils.lerp(this.hemiLight.intensity, ambientIntensity * 1.35, delta * 3);
 
       // Rain Streaks Animation
       if (this.rainMesh && this.rainGeo) {
@@ -2468,7 +3003,7 @@ export class SubwayRickshawEngine {
 
         this.lightningTimer -= delta;
         if (this.lightningTimer <= 0) {
-          this.ambientLight.intensity = 4.2;
+          this.hemiLight.intensity = 4.2;
           this.sound.playThunder();
           this.lightningTimer = 7.0 + Math.random() * 12.0;
         }
@@ -2511,14 +3046,17 @@ export class SubwayRickshawEngine {
     if (this.scene.fog) {
       (this.scene.fog as THREE.Fog).color.setHex(fogColor);
     }
+    const isNightNow = this.timeOfDayLabel === 'Karachi Night' || this.weather === 'NIGHT';
+    setNight(isNightNow);
+    setBuildingNight(isNightNow);
     this.sunLight.intensity = THREE.MathUtils.lerp(
       this.sunLight.intensity,
       sunIntensity * underpassShadeMult,
       delta * 3
     );
-    this.ambientLight.intensity = THREE.MathUtils.lerp(
-      this.ambientLight.intensity,
-      ambientIntensity * underpassShadeMult,
+    this.hemiLight.intensity = THREE.MathUtils.lerp(
+      this.hemiLight.intensity,
+      ambientIntensity * 1.35 * underpassShadeMult,
       delta * 3
     );
   }
@@ -2539,6 +3077,27 @@ export class SubwayRickshawEngine {
       this.speedUpFlashTimer = Math.max(0, this.speedUpFlashTimer - delta);
     }
 
+    // 1B. Dynamic Karachi District Progression & Street Style Streak Timer
+    const districts = [
+      'Saddar & Empress Mkt',
+      'M.A. Jinnah Road',
+      'Burns Rd Food Street',
+      'Clifton Sea View Hwy'
+    ];
+    const distIdx = Math.floor(this.distance / 400) % districts.length;
+    if (distIdx !== this.currentDistrictIndex) {
+      this.currentDistrictIndex = distIdx;
+      this.currentDistrict = districts[distIdx];
+      this.sound.playQuestComplete();
+      this.emitToast(`🛣️ ENTERING KARACHI ZONE: ${this.currentDistrict.toUpperCase()}!`);
+    }
+    if (this.streakTimer > 0) {
+      this.streakTimer = Math.max(0, this.streakTimer - delta);
+      if (this.streakTimer === 0) {
+        this.streakCount = 0;
+      }
+    }
+
     // 2. Exponential Speed Curve
     const startSpeed = GAME_CONFIG.BASE_SPEED;
     const maxSpeed = GAME_CONFIG.MAX_SPEED * this.vehicleDef.speedMultiplier;
@@ -2554,16 +3113,28 @@ export class SubwayRickshawEngine {
     }
 
     if (this.fuel <= 0) {
-      this.fuel = 0;
-      this.fuelEmptyTimer += delta;
-      this.stallSpeedFactor = Math.max(0.18, 1.0 - this.fuelEmptyTimer / GAME_CONFIG.FUEL_STALL_DECAY_TIME);
-      if (this.policeChase) {
-        this.policeChase.state = 'CLOSE';
-        this.policeChase.gap = Math.max(1.2, this.policeChase.gap - delta * 3.4);
-      }
-      if (this.fuelEmptyTimer >= GAME_CONFIG.FUEL_EMPTY_ARREST_TIME) {
-        this.triggerGameOver('⛽ Out of Petrol/CNG Fuel! Caught by Lahore Highway Patrol!');
-        return;
+      if ((this.upgrades.reserveFuelCount || 0) > 0) {
+        this.upgrades.reserveFuelCount = (this.upgrades.reserveFuelCount || 1) - 1;
+        localStorage.setItem('rickshaw_upgrades', JSON.stringify(this.upgrades));
+        this.fuel = 65;
+        this.cngFuel = 65;
+        this.fuelEmptyTimer = 0;
+        this.stallSpeedFactor = 1.0;
+        this.sound.playPowerup();
+        this.triggerScreenFlash('#22c55e', 0.25);
+        this.emitToast('⛽ RESERVE PETROL CAN AUTO-REFILLED +65% FUEL!');
+      } else {
+        this.fuel = 0;
+        this.fuelEmptyTimer += delta;
+        this.stallSpeedFactor = Math.max(0.18, 1.0 - this.fuelEmptyTimer / GAME_CONFIG.FUEL_STALL_DECAY_TIME);
+        if (this.policeChase) {
+          this.policeChase.state = 'CLOSE';
+          this.policeChase.gap = Math.max(1.2, this.policeChase.gap - delta * 3.4);
+        }
+        if (this.fuelEmptyTimer >= GAME_CONFIG.FUEL_EMPTY_ARREST_TIME) {
+          this.triggerGameOver('⛽ Out of Petrol/CNG Fuel! Caught by Lahore Highway Patrol!');
+          return;
+        }
       }
     } else {
       this.fuelEmptyTimer = 0;
@@ -2576,22 +3147,43 @@ export class SubwayRickshawEngine {
       }
     }
 
+    // Chai Nitro Overdrive countdown & spark trail
+    if (this.isNitroActive) {
+      this.nitroTimer = Math.max(0, this.nitroTimer - delta);
+      if (Math.random() < 0.45) {
+        this.spawnPickupBurst(this.rickshaw.position, Math.random() < 0.5 ? 0xfacc15 : 0x38bdf8, 4);
+      }
+      if (this.nitroTimer <= 0) {
+        this.isNitroActive = false;
+        this.invulnerabilityTimer = Math.max(this.invulnerabilityTimer, 0.9);
+        this.emitToast('☕ CHAI NITRO COMPLETE! (0.9s SAFE GRACE)');
+      }
+    }
+
     const mysterySpeedMult = this.isMysteryActive && this.mysteryVehicle === 'tonga' ? 1.25 : 1.0;
+    const nitroSpeedMult = this.isNitroActive ? 1.38 : 1.0;
     // Speed stays constant during flyover climbs (no slowdown on ramps!)
     const currentSpeed =
       (this.activePowerup === 'JETPACK' ? this.speed * 1.5 : this.speed) *
       this.stallSpeedFactor *
-      mysterySpeedMult;
+      mysterySpeedMult *
+      nitroSpeedMult;
 
-    // 4. Feel of Speed + Slight Climb FOV Widening
+    // 4. Feel of Speed + Slight Climb FOV Widening (only call updateProjectionMatrix when FOV actually changes)
     const speedRatio = Math.max(0, Math.min(1.0, (this.speed - startSpeed) / (maxSpeed - startSpeed)));
     const climbFovBonus = this.playerFlyoverPassLevel === 1 ? GAME_CONFIG.FLYOVER_CLIMB_FOV_BONUS : 0;
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 64 + 18 * speedRatio + climbFovBonus, delta * 3.5);
-    this.camera.updateProjectionMatrix();
+    const targetFov = 64 + 18 * speedRatio + climbFovBonus;
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, delta * 3.5);
+      this.camera.updateProjectionMatrix();
+    }
 
     const moveZ = currentSpeed * delta;
     this.rickshaw.position.z -= moveZ;
     let pZ = this.rickshaw.position.z;
+    if (window.playerModel) {
+      window.playerModel.position.z = pZ;
+    }
     this.distance += moveZ;
 
     // Drain fuel with distance traveled: drain = baseRate * (0.6 + speed / maxSpeed)
@@ -2731,6 +3323,9 @@ export class SubwayRickshawEngine {
     this.rickshaw.rotation.z = this.rickshawRoll;
     this.rickshaw.rotation.y = THREE.MathUtils.lerp(this.rickshaw.rotation.y, -targetRoll * 0.45, Math.min(1.0, delta * 12));
     this.rickshaw.position.x = this.playerX;
+    if (window.playerModel) {
+      window.playerModel.position.x = this.playerX;
+    }
 
     // Authentic Auto-Rickshaw Steering Animation:
     // Handlebar and Front Wheel turn together with lateral speed
@@ -2863,7 +3458,8 @@ export class SubwayRickshawEngine {
       if (this.isJumping || this.jumpOffset > 0.001) {
         this.jumpOffset += this.verticalVelocity * delta;
         const gravMultiplier = this.verticalVelocity < 0 ? 1.65 : 1.0;
-        this.verticalVelocity -= GAME_CONFIG.GRAVITY * gravMultiplier * delta;
+        const repulsorHoverDamp = (this.vehicleDef.id === 'ironman' && this.verticalVelocity < 0 && this.jumpOffset > 0.8) ? 0.65 : 1.0;
+        this.verticalVelocity -= GAME_CONFIG.GRAVITY * gravMultiplier * repulsorHoverDamp * delta;
 
         // Cap boosted jump height below overhead deck ceiling (when on level 0) or overhead beams
         let maxAllowedJumpOffset = GAME_CONFIG.OVERHEAD_CEILING_CLEARANCE;
@@ -2901,6 +3497,9 @@ export class SubwayRickshawEngine {
 
       this.playerY = this.groundY + this.jumpOffset;
       this.rickshaw.position.y = this.playerY;
+      if (window.playerModel) {
+        window.playerModel.position.y = this.playerY;
+      }
 
       // Smoothly damp vehicle pitch to match ramp slope + jump arc pitch
       const targetPitch = slopePitch + (this.isJumping ? this.verticalVelocity * 0.014 : 0);
@@ -2916,34 +3515,46 @@ export class SubwayRickshawEngine {
     }
 
     // Ground/Deck Blob Shadow anchored on current surface
+    if (this.playerBlobShadow) {
+      const shadowScale = Math.max(0.28, 1 - this.jumpOffset * 0.13);
+      this.playerBlobShadow.position.set(this.playerX, this.groundY + 0.025, pZ);
+      this.playerBlobShadow.scale.set(shadowScale, 1, shadowScale);
+    }
     if (this.rickshaw.userData.groundShadow) {
-      const shadowScale = Math.max(0.3, 1 - this.jumpOffset * 0.14);
-      this.rickshaw.userData.groundShadow.scale.set(shadowScale, 1, shadowScale);
-      // Since groundShadow is a child of rickshaw, offset it by -jumpOffset so it hugs groundY + 0.02
-      this.rickshaw.userData.groundShadow.position.y = -this.jumpOffset + 0.02;
+      this.rickshaw.userData.groundShadow.visible = false;
     }
 
     // Sliding & Landing Squash
     if (this.isSliding) {
       this.slideTimer -= delta;
-      this.rickshaw.scale.set(1.06, 0.55, 1.04);
+      if (this.rickshaw.userData.isAvenger) {
+        this.rickshaw.scale.set(1, 1, 1);
+      } else {
+        this.rickshaw.scale.set(1.06, 0.55, 1.04);
+      }
       if (this.slideTimer <= 0) {
         this.isSliding = false;
         this.rickshaw.scale.set(1, 1, 1);
       }
     } else if (this.landingSquashTimer > 0) {
       this.landingSquashTimer = Math.max(0, this.landingSquashTimer - delta);
-      const sq = Math.sin((this.landingSquashTimer / 0.14) * Math.PI) * 0.14;
+      const sq = Math.sin((this.landingSquashTimer / 0.14) * Math.PI) * (this.rickshaw.userData.isAvenger ? 0.08 : 0.14);
       this.rickshaw.scale.set(1 + sq, 1 - sq, 1 + sq * 0.5);
     } else {
       this.rickshaw.scale.set(1, 1, 1);
     }
 
-    // Wheels Spin
+    // Kinematic Hero Limb Animation (Spider-Man, Iron Man, Captain America, Thor, Hulk)
+    if (this.rickshaw.userData.isAvenger) {
+      this.updateHeroKinematicAnimation(delta, currentSpeed);
+    }
+
+    // Wheels Spin (rotate wheel group around X axle proportional to speed / wheelRadius)
     if (this.rickshaw.userData.wheels) {
-      const spin = currentSpeed * 0.6;
+      const wRadius = this.rickshaw.userData.wheelRadius || 0.35;
+      const dAngle = (currentSpeed * delta) / wRadius;
       this.rickshaw.userData.wheels.forEach((w: THREE.Group) => {
-        w.children.forEach((c) => (c.rotation.x += spin * delta));
+        w.rotation.x -= dAngle;
       });
     }
 
@@ -3007,6 +3618,9 @@ export class SubwayRickshawEngine {
       for (let i = 0; i < this.activePowerups.length; i++) {
         this.activePowerups[i].position.z += zShift;
       }
+      for (let i = 0; i < this.pendingSpawnQueue.length; i++) {
+        this.pendingSpawnQueue[i].zPos += zShift;
+      }
       if (this.policeChase) {
         this.policeChase.shiftOrigin(zShift);
       }
@@ -3016,17 +3630,19 @@ export class SubwayRickshawEngine {
       shiftTerrainOrigin(zShift);
     }
 
+    // PERF (Stage 3): Process 1 queued chunk pattern piece per frame (zero frame-time spikes)
+    this.processPendingSpawnSlice();
+
     const curPZ = this.rickshaw.position.z;
 
     // Living World: Pedestrians walking animation, crossing motion & despawn
     for (let pIdx = this.activePedestrians.length - 1; pIdx >= 0; pIdx--) {
       const ped = this.activePedestrians[pIdx];
 
-      // Despawn crossing pedestrians / cats when passed behind camera
+      // PERF (Stage 3): Recycle crossing pedestrians / cats back into pool when passed behind camera
       if (ped.userData.isCat || ped.userData.isCrossingPed) {
         if (ped.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
-          this.disposeObjectHierarchy(ped);
-          this.scene.remove(ped);
+          this.releasePooledObstacle(ped);
           this.activePedestrians.splice(pIdx, 1);
           continue;
         }
@@ -3278,12 +3894,16 @@ export class SubwayRickshawEngine {
         v.rotation.x = 0;
       }
 
-      // Wheel spin
+      // Wheel spin & suspension bounce tied to vehicle speed
       if (v.userData.wheels) {
-        const cSpin = v.userData.speed * 0.55;
+        const wRadius = v.userData.wheelRadius || 0.35;
+        const dAngle = (v.userData.speed * delta) / wRadius;
         v.userData.wheels.forEach((w: THREE.Group) => {
-          w.children.forEach((c) => (c.rotation.x += cSpin * delta));
+          w.rotation.x -= dAngle;
         });
+      }
+      if (v.userData.bodyGroup) {
+        v.userData.bodyGroup.position.y = Math.sin(this.suspensionPhase + i * 1.3) * 0.022;
       }
 
       // Smooth lateral lane interpolation with authentic body roll & yaw tilt
@@ -3360,6 +3980,7 @@ export class SubwayRickshawEngine {
         chunk.position.z = zPos;
         const recycledIdx = this.nextChunkIndex++;
         chunk.userData.chunkIndex = recycledIdx;
+        chunk.userData.shopOrderServedThisPass = false;
         this.nextSpawnZ = zPos - GAME_CONFIG.CHUNK_LENGTH;
 
         // Reset splash status for puddles on recycled chunk
@@ -3376,6 +3997,24 @@ export class SubwayRickshawEngine {
         }
 
         this.populateChunkContent(zPos, recycledIdx);
+      } else if (
+        this.verticalLevel === 0 &&
+        !chunk.userData.shopOrderServedThisPass &&
+        Math.abs(this.playerX) >= 3.0 &&
+        Math.abs(chunk.position.z - curPZ) < 4.0
+      ) {
+        // Open Roadside Dhaba / Paan Kiosk outer-lane drive-by express pickup
+        chunk.userData.shopOrderServedThisPass = true;
+        this.roadsideOrdersServed++;
+        const tip = 20 * this.scoreMultiplier;
+        this.coins += tip;
+        this.totalRupees += tip;
+        this.fuel = Math.min(GAME_CONFIG.FUEL_MAX, this.fuel + 12);
+        this.cngFuel = this.fuel;
+        this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 25);
+        this.sound.playCoin();
+        this.spawnPickupBurst(this.rickshaw.position, 0xfacc15, 16);
+        this.emitToast(`🍵 ROADSIDE OPEN SHOP DRIVE-BY! +${tip} PKR, +12% FUEL & +25% NITRO!`);
       }
     }
 
@@ -3398,8 +4037,8 @@ export class SubwayRickshawEngine {
       }
 
       if (obs.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
-        this.disposeObjectHierarchy(obs);
-        this.scene.remove(obs);
+        // PERF (Stage 3): Recycle obstacle back into pool instead of disposing
+        this.releasePooledObstacle(obs);
         this.activeObstacles.splice(i, 1);
         continue;
       }
@@ -3506,6 +4145,25 @@ export class SubwayRickshawEngine {
 
     // Collision check for crossing pedestrians and street cats (ground level 0 only)
     if (this.verticalLevel === 0) {
+      if (this.npcManager) {
+        this.npcManager.update(delta, {
+          x: this.playerX,
+          y: this.playerY,
+          z: curPZ,
+          timeOfDay: this.timeOfDayLabel
+        });
+        const npcHit = this.npcManager.checkCollision({
+          x: this.playerX,
+          y: this.jumpOffset,
+          z: curPZ
+        });
+        if (npcHit) {
+          this.coins = Math.max(0, this.coins - npcHit.penalty);
+          this.totalRupees = Math.max(0, this.totalRupees - npcHit.penalty);
+          this.emitToast(`⚠️ CAREFUL! Bumped ${npcHit.label}! (-${npcHit.penalty} PKR)`);
+          this.handleStumble(`Careful! Swerved into ${npcHit.label}!`);
+        }
+      }
       for (const ped of this.activePedestrians) {
         if (ped.userData.isCat || ped.userData.isCrossingPed) {
           const zDiff = Math.abs(ped.position.z - curPZ);
@@ -3525,6 +4183,12 @@ export class SubwayRickshawEngine {
       if (zDiff < 3.0 && zDiff > 0.6 && xDiff > 1.15 && xDiff < 2.4 && !v.userData.nearMissAwarded) {
         v.userData.nearMissAwarded = true;
         this.closeCallCount++;
+        this.streakCount++;
+        this.streakTimer = 4.5;
+        const streakBonus = Math.min(30, this.streakCount * 5);
+        this.coins += streakBonus;
+        this.totalRupees += streakBonus;
+        this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 25);
         if (this.policeChase) this.policeChase.registerNearMiss();
         this.sound.playCloseCall();
         const phrases = ['Oye Hoye!', 'Shabaash!', 'Zabardast!', 'Balle Balle!', 'Bach Ke!'];
@@ -3540,6 +4204,7 @@ export class SubwayRickshawEngine {
       if (zDiff < 3.0 && zDiff > 0.6 && xDiff > 1.15 && xDiff < 2.4 && !obs.userData.nearMissAwarded) {
         obs.userData.nearMissAwarded = true;
         this.closeCallCount++;
+        this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 25);
         if (this.policeChase) this.policeChase.registerNearMiss();
         this.sound.playCloseCall();
         const phrases = ['Oye Hoye!', 'Shabaash!', 'Zabardast!', 'Bach Ke!'];
@@ -3589,10 +4254,13 @@ export class SubwayRickshawEngine {
         continue;
       }
 
-      if (this.activePowerup === 'MAGNET' || (this.isMysteryActive && this.mysteryVehicle === 'tonga')) {
+      const isSpiderMan = this.vehicleDef.id === 'spiderman';
+      const isThor = this.vehicleDef.id === 'thor';
+      if (this.activePowerup === 'MAGNET' || (this.isMysteryActive && this.mysteryVehicle === 'tonga') || isSpiderMan || isThor) {
+        const pullDistLimit = (isSpiderMan || isThor) ? 14 : 18;
         const cDist = coin.position.distanceTo(this.rickshaw.position);
-        if (cDist < 18) {
-          coin.position.lerp(this.rickshaw.position, delta * 10);
+        if (cDist < pullDistLimit) {
+          coin.position.lerp(this.rickshaw.position, delta * 9.5);
         }
       }
 
@@ -3604,6 +4272,7 @@ export class SubwayRickshawEngine {
         const earned = 1 * this.scoreMultiplier * shortcutBonus * tongaBonus;
         this.coins += earned;
         this.totalRupees += earned;
+        this.chaiNitroCharge = Math.min(100, this.chaiNitroCharge + 2);
         if (this.policeChase) this.policeChase.registerCleanCoin();
         this.sound.playCoin();
         this.spawnCoinSparkle(coin.position);
@@ -3618,8 +4287,8 @@ export class SubwayRickshawEngine {
       pUp.rotation.y += delta * 3;
 
       if (pUp.position.z > curPZ + GAME_CONFIG.DESPAWN_DISTANCE) {
-        this.disposeObjectHierarchy(pUp);
-        this.scene.remove(pUp);
+        // PERF (Stage 3): Recycle powerup back into pool instead of disposing
+        this.releasePooledObstacle(pUp);
         this.activePowerups.splice(i, 1);
         continue;
       }
@@ -3632,8 +4301,8 @@ export class SubwayRickshawEngine {
         } else {
           this.activatePowerupItem(pUp.userData.type as PowerupType);
         }
-        this.disposeObjectHierarchy(pUp);
-        this.scene.remove(pUp);
+        // PERF (Stage 3): Recycle collected powerup back into pool
+        this.releasePooledObstacle(pUp);
         this.activePowerups.splice(i, 1);
       }
     }
@@ -3912,14 +4581,340 @@ export class SubwayRickshawEngine {
         debugBaseMarkers: this.debugBaseMarkers,
         debugHeightOverlay: this.debugHeightOverlay,
         debugWireframe: this.debugWireframe,
-        unpatchedCount: this.unpatchedCount
+        debugBoundingBoxes: this.debugBoundingBoxes,
+        isShowroomMode: this.isShowroomMode,
+        showroomValidationResults: this.showroomValidationResults,
+        unpatchedCount: this.unpatchedCount,
+        chaiNitroCharge: Math.round(this.chaiNitroCharge),
+        isNitroActive: this.isNitroActive,
+        nitroTimer: Number(this.nitroTimer.toFixed(1)),
+        roadsideOrdersServed: this.roadsideOrdersServed,
+        isNPCGalleryOpen: this.isNPCGalleryOpen,
+        isShopGalleryOpen: this.isShopGalleryOpen,
+        isBuildingGalleryOpen: this.isBuildingGalleryOpen,
+        buildingGalleryStage: this.buildingGalleryStage,
+        currentDistrict: this.currentDistrict,
+        streakCount: this.streakCount,
+        showPerfOverlay: this.showPerfOverlay,
+        perfMetrics: this.perfMetrics
       });
     }
   }
 
   // ============================================================================
-  // DEBUG OVERLAY TOGGLES & AUTOMATED VERIFICATION SUITES (Phase 6)
+  // DEBUG OVERLAY TOGGLES & AUTOMATED VERIFICATION SUITES (Phase 6 + Key B)
   // ============================================================================
+  /**
+   * Key B Debug Toggle:
+   * Shows Box3Helper and AxesHelper on every vehicle in the scene, and runs
+   * alignment validation across all 8 VEHICLE_SPECS models.
+   */
+  public toggleBoundingBoxDebug(): boolean {
+    this.debugBoundingBoxes = !this.debugBoundingBoxes;
+    setSceneDebugHelpersVisible(this.scene, this.debugBoundingBoxes);
+    if (this.debugBoundingBoxes && this.showroomValidationResults.length === 0) {
+      const { results, group } = createModelShowroom();
+      this.showroomValidationResults = results;
+      group.visible = false;
+      this.showroomGroup = group;
+      this.scene.add(group);
+    }
+    const passedCount = this.showroomValidationResults.filter((r) => r.passed).length;
+    const totalCount = this.showroomValidationResults.length;
+    this.emitToast(
+      `📦 VEHICLE BOX3 + AXES DEBUG (KEY B): ${this.debugBoundingBoxes ? 'ON' : 'OFF'} (${passedCount}/${totalCount} SPECS PASS)`
+    );
+    this.notifyStats();
+    return this.debugBoundingBoxes;
+  }
+
+  /**
+   * Toggles the Model Showroom scene that lines up all 8 VEHICLE_SPECS models in a row
+   * on a reference ground grid with Box3Helpers and AxesHelpers for visual checking.
+   */
+  /**
+   * Key G Toggle:
+   * Toggles the 3D Karachi Street NPC Gallery (showNPCGallery) lining up all 15
+   * procedural low-poly NPC & Animal types on a rotating sandstone stage.
+   */
+  public toggleNPCGallery(): boolean {
+    return this.setNPCGalleryMode(!this.isNPCGalleryOpen);
+  }
+
+  public setNPCGalleryMode(active: boolean): boolean {
+    if (!this.npcManager) return false;
+    this.isNPCGalleryOpen = this.npcManager.showNPCGallery(active);
+    if (this.isNPCGalleryOpen) {
+      if (this.isShowroomMode) {
+        this.setShowroomMode(false);
+      }
+      if (this.isShopGalleryOpen) {
+        this.setShopGalleryMode(false);
+      }
+      uCurve.value = 0;
+      this.rickshaw.visible = false;
+      this.roadChunks.forEach((ch) => (ch.visible = false));
+      this.activeObstacles.forEach((o) => (o.visible = false));
+      this.activeAITraffic.forEach((v) => (v.visible = false));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = false;
+        this.policeChase.rightCar.visible = false;
+      }
+      this.emitToast('👥 KARACHI STREET NPC GALLERY [KEY G] — ALL 15 PROCEDURAL CHARACTERS & ANIMALS');
+    } else {
+      uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
+      this.rickshaw.visible = true;
+      this.roadChunks.forEach((ch) => (ch.visible = true));
+      this.activeObstacles.forEach((o) => (o.visible = true));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = true;
+        this.policeChase.rightCar.visible = true;
+      }
+      this.emitToast('🛣️ RETURNED TO KARACHI STREET SCENE');
+    }
+    this.notifyStats();
+    return this.isNPCGalleryOpen;
+  }
+
+  /**
+   * Key H Toggle:
+   * Toggles the 3D Pakistani Bazaar Shop Gallery (showShopGallery) lining up all 12
+   * procedural shop types side-by-side in 2 tiers for inspection.
+   */
+  public toggleShopGallery(): boolean {
+    return this.setShopGalleryMode(!this.isShopGalleryOpen);
+  }
+
+  public setShopGalleryMode(active: boolean): boolean {
+    this.isShopGalleryOpen = showShopGallery(this.scene, active);
+    if (this.isShopGalleryOpen) {
+      if (this.isShowroomMode) {
+        this.setShowroomMode(false);
+      }
+      if (this.isNPCGalleryOpen) {
+        this.setNPCGalleryMode(false);
+      }
+      if (this.isBuildingGalleryOpen) {
+        this.setBuildingGalleryMode(false);
+      }
+      uCurve.value = 0;
+      this.rickshaw.visible = false;
+      this.roadChunks.forEach((ch) => (ch.visible = false));
+      this.activeObstacles.forEach((o) => (o.visible = false));
+      this.activeAITraffic.forEach((v) => (v.visible = false));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = false;
+        this.policeChase.rightCar.visible = false;
+      }
+      this.emitToast('🏪 KARACHI BAZAAR SHOP GALLERY [KEY H] — ALL 12 HAND-PAINTED SHOP TYPES');
+    } else {
+      uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
+      this.rickshaw.visible = true;
+      this.roadChunks.forEach((ch) => (ch.visible = true));
+      this.activeObstacles.forEach((o) => (o.visible = true));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = true;
+        this.policeChase.rightCar.visible = true;
+      }
+      this.emitToast('🛣️ RETURNED TO KARACHI STREET SCENE');
+    }
+    this.notifyStats();
+    return this.isShopGalleryOpen;
+  }
+
+  /**
+   * Key B Toggle:
+   * Toggles the 3D Pakistani Skyline Building Gallery (showBuildingGallery) lining up
+   * all 12 procedural building types (or filtered by Stage 1, 2, 3) for inspection.
+   */
+  public toggleBuildingGallery(): boolean {
+    return this.setBuildingGalleryMode(!this.isBuildingGalleryOpen, this.buildingGalleryStage);
+  }
+
+  public setBuildingGalleryStage(stage: number): void {
+    this.buildingGalleryStage = stage;
+    if (this.isBuildingGalleryOpen) {
+      showBuildingGallery(this.scene, true, stage);
+      this.notifyStats();
+    }
+  }
+
+  public setBuildingGalleryMode(active: boolean, stage: number = 0): boolean {
+    this.buildingGalleryStage = stage;
+    this.isBuildingGalleryOpen = showBuildingGallery(this.scene, active, stage);
+    if (this.isBuildingGalleryOpen) {
+      if (this.isShowroomMode) {
+        this.setShowroomMode(false);
+      }
+      if (this.isNPCGalleryOpen) {
+        this.setNPCGalleryMode(false);
+      }
+      if (this.isShopGalleryOpen) {
+        this.setShopGalleryMode(false);
+      }
+      uCurve.value = 0;
+      this.rickshaw.visible = false;
+      this.roadChunks.forEach((ch) => (ch.visible = false));
+      this.activeObstacles.forEach((o) => (o.visible = false));
+      this.activeAITraffic.forEach((v) => (v.visible = false));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = false;
+        this.policeChase.rightCar.visible = false;
+      }
+      this.emitToast('🏙️ PAKISTANI SKYLINE BUILDING GALLERY [KEY B] — ALL 12 SKYLINE & SET-PIECE BUILDINGS');
+    } else {
+      uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
+      this.rickshaw.visible = true;
+      this.roadChunks.forEach((ch) => (ch.visible = true));
+      this.activeObstacles.forEach((o) => (o.visible = true));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = true;
+        this.policeChase.rightCar.visible = true;
+      }
+      this.emitToast('🛣️ RETURNED TO KARACHI STREET SCENE');
+    }
+    this.notifyStats();
+    return this.isBuildingGalleryOpen;
+  }
+
+  /**
+   * Stage 0 Perf Overlay Toggle (Key F or Triple-Tap on screen)
+   */
+  public togglePerfOverlay(): boolean {
+    this.showPerfOverlay = !this.showPerfOverlay;
+    this.notifyStats();
+    return this.showPerfOverlay;
+  }
+
+  /**
+   * Key B Toggle:
+   * Toggles the 3D Pakistani Skyline Building Gallery (showBuildingGallery) lining up
+   * all 12 procedural building types (or filtered by Stage 1, 2, 3) for inspection.
+   */
+  public toggleBuildingGallery(): boolean {
+    return this.setBuildingGalleryMode(!this.isBuildingGalleryOpen, this.buildingGalleryStage);
+  }
+
+  public setBuildingGalleryStage(stage: number): void {
+    this.buildingGalleryStage = stage;
+    if (this.isBuildingGalleryOpen) {
+      showBuildingGallery(this.scene, true, stage);
+      this.notifyStats();
+    }
+  }
+
+  public setBuildingGalleryMode(active: boolean, stage: number = 0): boolean {
+    this.buildingGalleryStage = stage;
+    this.isBuildingGalleryOpen = showBuildingGallery(this.scene, active, stage);
+    if (this.isBuildingGalleryOpen) {
+      if (this.isShowroomMode) {
+        this.setShowroomMode(false);
+      }
+      if (this.isNPCGalleryOpen) {
+        this.setNPCGalleryMode(false);
+      }
+      if (this.isShopGalleryOpen) {
+        this.setShopGalleryMode(false);
+      }
+      uCurve.value = 0;
+      this.rickshaw.visible = false;
+      this.roadChunks.forEach((ch) => (ch.visible = false));
+      this.activeObstacles.forEach((o) => (o.visible = false));
+      this.activeAITraffic.forEach((v) => (v.visible = false));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = false;
+        this.policeChase.rightCar.visible = false;
+      }
+      this.emitToast('🏙️ PAKISTANI SKYLINE BUILDING GALLERY [KEY B] — ALL 12 SKYLINE & SET-PIECE BUILDINGS');
+    } else {
+      uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
+      this.rickshaw.visible = true;
+      this.roadChunks.forEach((ch) => (ch.visible = true));
+      this.activeObstacles.forEach((o) => (o.visible = true));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = true;
+        this.policeChase.rightCar.visible = true;
+      }
+      this.emitToast('🛣️ RETURNED TO KARACHI STREET SCENE');
+    }
+    this.notifyStats();
+    return this.isBuildingGalleryOpen;
+  }
+
+  /**
+   * Stage 0 Perf Overlay Toggle (Key F or Triple-Tap on screen)
+   */
+  public togglePerfOverlay(): boolean {
+    this.showPerfOverlay = !this.showPerfOverlay;
+    this.notifyStats();
+    return this.showPerfOverlay;
+  }
+
+  public toggleShowroomMode(): boolean {
+    return this.setShowroomMode(!this.isShowroomMode);
+  }
+
+  public setShowroomMode(active: boolean): boolean {
+    this.isShowroomMode = active;
+    if (!this.showroomGroup) {
+      const { group, results } = createModelShowroom();
+      this.showroomGroup = group;
+      this.showroomValidationResults = results;
+      this.scene.add(this.showroomGroup);
+    }
+
+    this.showroomGroup.visible = active;
+    if (active) {
+      this.debugBoundingBoxes = true;
+      setSceneDebugHelpersVisible(this.scene, true);
+      uCurve.value = 0; // Keep showroom floor flat for exact geometric inspection
+      this.rickshaw.visible = false;
+      this.roadChunks.forEach((ch) => (ch.visible = false));
+      this.activeObstacles.forEach((o) => (o.visible = false));
+      this.activeAITraffic.forEach((v) => (v.visible = false));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = false;
+        this.policeChase.rightCar.visible = false;
+      }
+      this.emitToast('🏛️ MODEL SHOWROOM ACTIVE — ALL 8 VEHICLE_SPECS LINED UP AT Y=0 (←/→ TO FOCUS)');
+    } else {
+      uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
+      this.rickshaw.visible = true;
+      this.roadChunks.forEach((ch) => (ch.visible = true));
+      this.activeObstacles.forEach((o) => (o.visible = true));
+      if (this.policeChase) {
+        this.policeChase.leftCar.visible = true;
+        this.policeChase.rightCar.visible = true;
+      }
+      setSceneDebugHelpersVisible(this.scene, this.debugBoundingBoxes);
+      this.emitToast('🛣️ RETURNED TO STREET SCENE');
+    }
+    this.notifyStats();
+    return this.isShowroomMode;
+  }
+
+  public cycleShowroomFocus(dir: number) {
+    if (!this.isShowroomMode || !this.showroomGroup) return;
+    const items = (this.showroomGroup.userData.items as { x: number; key: string }[]) || [];
+    if (items.length === 0) return;
+    this.showroomFocusIndex += dir;
+    if (this.showroomFocusIndex >= items.length) {
+      this.showroomFocusIndex = -1; // -1 = full lineup view
+    } else if (this.showroomFocusIndex < -1) {
+      this.showroomFocusIndex = items.length - 1;
+    }
+    this.garageTurntableAngle = 0;
+    if (this.showroomFocusIndex === -1) {
+      this.emitToast('🏛️ SHOWROOM: FULL LINEUP OVERVIEW (8 MODELS)');
+    } else {
+      const item = items[this.showroomFocusIndex];
+      const spec = VEHICLE_SPECS[item.key];
+      this.emitToast(
+        `🔎 INSPECTING: ${spec ? spec.name.toUpperCase() : item.key.toUpperCase()} (${spec.length}m × ${spec.width}m × ${spec.height}m)`
+      );
+    }
+    this.notifyStats();
+  }
   public toggleCurve(): boolean {
     this.curveEnabled = !this.curveEnabled;
     uCurve.value = this.curveEnabled ? GAME_CONFIG.CURVE_STRENGTH : 0;
@@ -4202,28 +5197,180 @@ export class SubwayRickshawEngine {
     if (this.onToast) this.onToast(msg);
   }
 
-  public createPlayerVehicleMesh(vehicleId: VehicleId, skinId: RickshawSkin): THREE.Group {
-    let mesh: THREE.Group;
-    switch (vehicleId) {
-      case 'bolan':
-        mesh = createSuzukiBolan();
-        break;
-      case 'truck':
-        mesh = createDecoratedTruck();
-        break;
-      case 'motorbike':
-        mesh = createPlayerMotorbike();
-        break;
-      case 'chingchi':
-        mesh = createChingchi();
-        break;
-      case 'rickshaw':
-      default:
-        mesh = createDetailedRickshaw(skinId);
-        break;
+  private updateHeroKinematicAnimation(delta: number, currentSpeed: number) {
+    const ud = this.rickshaw.userData;
+    if (!ud || !ud.isAvenger) return;
+
+    const isAirborne = this.isJumping || this.jumpOffset > 0.08;
+    const isSliding = this.isSliding;
+
+    if (isSliding) {
+      // Superhero dynamic athletic knee slide
+      if (ud.leftLeg) {
+        ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, -1.25, delta * 15);
+        ud.leftLeg.rotation.z = THREE.MathUtils.lerp(ud.leftLeg.rotation.z, 0.15, delta * 15);
+      }
+      if (ud.rightLeg) {
+        ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, 0.65, delta * 15);
+        ud.rightLeg.rotation.z = THREE.MathUtils.lerp(ud.rightLeg.rotation.z, -0.2, delta * 15);
+      }
+      if (ud.leftArm) {
+        ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, 0.85, delta * 15);
+      }
+      if (ud.rightArm) {
+        ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, -0.9, delta * 15);
+      }
+      if (ud.head) {
+        ud.head.rotation.x = THREE.MathUtils.lerp(ud.head.rotation.x, -0.3, delta * 15);
+      }
+      if (ud.suspensionPivot) {
+        ud.suspensionPivot.position.y = THREE.MathUtils.lerp(ud.suspensionPivot.position.y, -0.25, delta * 15);
+      }
+    } else if (isAirborne) {
+      // Airborne dynamic leap / flight poses
+      if (ud.heroId === 'ironman') {
+        // Iron Man repulsor flight pose: streamlined arms slightly back, glowing repulsors
+        if (ud.leftLeg) ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, 0.22, delta * 12);
+        if (ud.rightLeg) ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, 0.18, delta * 12);
+        if (ud.leftArm) {
+          ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, -0.65, delta * 12);
+          ud.leftArm.rotation.z = THREE.MathUtils.lerp(ud.leftArm.rotation.z, -0.25, delta * 12);
+        }
+        if (ud.rightArm) {
+          ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, -0.65, delta * 12);
+          ud.rightArm.rotation.z = THREE.MathUtils.lerp(ud.rightArm.rotation.z, 0.25, delta * 12);
+        }
+      } else if (ud.heroId === 'thor') {
+        // Thor aerial strike pose: Mjolnir held forward/high, legs tucked
+        if (ud.leftLeg) ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, -0.5, delta * 12);
+        if (ud.rightLeg) ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, 0.7, delta * 12);
+        if (ud.leftArm) ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, -0.4, delta * 12);
+        if (ud.rightArm) ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, 1.8, delta * 12);
+      } else if (ud.heroId === 'captain_america') {
+        // Cap tactical parkour vault: shield braced forward, knees tucked
+        if (ud.leftLeg) ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, -0.6, delta * 12);
+        if (ud.rightLeg) ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, 0.5, delta * 12);
+        if (ud.leftArm) ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, 0.9, delta * 12);
+        if (ud.rightArm) ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, -0.5, delta * 12);
+      } else if (ud.heroId === 'hulk') {
+        // Hulk massive ground-pound leap: limbs splayed ready to crush
+        if (ud.leftLeg) ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, -0.4, delta * 10);
+        if (ud.rightLeg) ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, 0.4, delta * 10);
+        if (ud.leftArm) ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, 1.2, delta * 10);
+        if (ud.rightArm) ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, 1.2, delta * 10);
+      } else {
+        // Spider-Man web-slinger tuck leap
+        if (ud.leftLeg) ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, 0.85, delta * 14);
+        if (ud.rightLeg) ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, -0.7, delta * 14);
+        if (ud.leftArm) ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, 1.15, delta * 14);
+        if (ud.rightArm) ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, -0.65, delta * 14);
+      }
+    } else {
+      // Kinematic running / sprinting stride
+      const swingMultiplier = ud.isHulk ? 0.55 : 0.78;
+      const legSwing = Math.sin(this.suspensionPhase * 1.6) * swingMultiplier;
+      const armSwing = Math.sin(this.suspensionPhase * 1.6) * (swingMultiplier * 0.95);
+
+      if (ud.leftLeg) {
+        ud.leftLeg.rotation.x = THREE.MathUtils.lerp(ud.leftLeg.rotation.x, legSwing, delta * 20);
+        ud.leftLeg.rotation.z = THREE.MathUtils.lerp(ud.leftLeg.rotation.z, 0, delta * 14);
+      }
+      if (ud.rightLeg) {
+        ud.rightLeg.rotation.x = THREE.MathUtils.lerp(ud.rightLeg.rotation.x, -legSwing, delta * 20);
+        ud.rightLeg.rotation.z = THREE.MathUtils.lerp(ud.rightLeg.rotation.z, 0, delta * 14);
+      }
+      if (ud.leftArm) {
+        ud.leftArm.rotation.x = THREE.MathUtils.lerp(ud.leftArm.rotation.x, -armSwing, delta * 20);
+        ud.leftArm.rotation.z = THREE.MathUtils.lerp(ud.leftArm.rotation.z, 0, delta * 14);
+      }
+      if (ud.rightArm) {
+        ud.rightArm.rotation.x = THREE.MathUtils.lerp(ud.rightArm.rotation.x, armSwing, delta * 20);
+        ud.rightArm.rotation.z = THREE.MathUtils.lerp(ud.rightArm.rotation.z, 0, delta * 14);
+      }
+      if (ud.head) {
+        ud.head.rotation.x = THREE.MathUtils.lerp(ud.head.rotation.x, Math.sin(this.suspensionPhase * 3.2) * 0.06, delta * 10);
+      }
+      if (ud.suspensionPivot) {
+        ud.suspensionPivot.position.y = Math.abs(Math.sin(this.suspensionPhase * 1.6)) * (ud.isHulk ? 0.12 : 0.07);
+      }
     }
-    patchObjectHierarchy(mesh);
-    return mesh;
+
+    // Hero special visual effects
+    if (ud.cape) {
+      // Thor's royal cape billowing behind him with speed
+      const flutter = Math.sin(this.suspensionPhase * 2.8) * 0.18 + (currentSpeed * 0.015);
+      ud.cape.rotation.x = 0.22 + flutter;
+    }
+    if (ud.arcReactorMat) {
+      // Iron Man Arc Reactor breathing glow
+      ud.arcReactorMat.emissiveIntensity = 1.6 + Math.sin(this.suspensionPhase * 4) * 0.6;
+    }
+  }
+
+  public createPlayerVehicleMesh(vehicleId: VehicleId, skinId: RickshawSkin): THREE.Group {
+    const vehicle = createPlayableVehicleById(vehicleId, skinId);
+    if (vehicle.userData.debugGroup) {
+      vehicle.userData.debugGroup.visible = this.debugBoundingBoxes;
+    }
+    this.attachNeonUnderglowToMesh(vehicle, this.upgrades.activeNeon || 'none');
+    patchObjectHierarchy(vehicle);
+    return vehicle;
+  }
+
+  private attachNeonUnderglowToMesh(vehicle: THREE.Group, neonId: NeonColorId) {
+    if (vehicle.userData.neonGlowMesh) {
+      vehicle.remove(vehicle.userData.neonGlowMesh);
+      vehicle.userData.neonGlowMesh = null;
+    }
+    if (!neonId || neonId === 'none') return;
+    const neonHexMap: Record<NeonColorId, number> = {
+      none: 0x000000,
+      emerald: 0x10b981,
+      cyan: 0x06b6d4,
+      gold: 0xfacc15,
+      magenta: 0xec4899
+    };
+    const hex = neonHexMap[neonId] || 0x10b981;
+    const glowGroup = new THREE.Group();
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.75, 2.75),
+      createGameMaterial({
+        kind: 'basic',
+        color: hex,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false
+      })
+    );
+    plate.rotation.x = -Math.PI / 2;
+    plate.position.y = 0.025;
+    glowGroup.add(plate);
+
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.75, 1.05, 24),
+      createGameMaterial({
+        kind: 'basic',
+        color: hex,
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.03;
+    glowGroup.add(ring);
+
+    vehicle.add(glowGroup);
+    vehicle.userData.neonGlowMesh = glowGroup;
+  }
+
+  public setNeonColor(neonId: NeonColorId) {
+    this.upgrades.activeNeon = neonId;
+    localStorage.setItem('rickshaw_upgrades', JSON.stringify(this.upgrades));
+    this.attachNeonUnderglowToMesh(this.rickshaw, neonId);
+    patchObjectHierarchy(this.rickshaw);
+    this.notifyStats();
   }
 
   public setVehicle(vehicleId: VehicleId) {
@@ -4239,13 +5386,18 @@ export class SubwayRickshawEngine {
     this.rickshaw = this.createPlayerVehicleMesh(vehicleId, this.currentSkin);
     this.rickshaw.position.copy(oldP);
     this.rickshaw.rotation.copy(oldR);
+    patchObjectHierarchy(this.rickshaw);
+    if (this.playerShieldBubble) {
+      this.rickshaw.add(this.playerShieldBubble);
+      this.syncShieldBubbleVisuals();
+    }
     this.scene.add(this.rickshaw);
 
     this.notifyStats();
   }
 
   public activateMysteryTransformation(forceType?: MysteryVehicleId) {
-    const chosen: MysteryVehicleId = forceType || (Math.random() < 0.5 ? 'tractor' : 'tonga');
+    const chosen: MysteryVehicleId = forceType || (Math.random() < 0.65 ? 'hulk' : (Math.random() < 0.5 ? 'tractor' : 'tonga'));
     this.isMysteryActive = true;
     this.mysteryVehicle = chosen;
     this.mysteryTimer = GAME_CONFIG.MYSTERY_BOX_DURATION;
@@ -4255,7 +5407,11 @@ export class SubwayRickshawEngine {
     const oldR = this.rickshaw.rotation.clone();
     this.scene.remove(this.rickshaw);
 
-    if (chosen === 'tractor') {
+    if (chosen === 'hulk') {
+      this.rickshaw = createHulkMesh();
+      this.emitToast('💥 THE INCREDIBLE HULK! SMASH ALL ROAD HAZARDS & TRAFFIC FOR 10s!');
+      this.sound.speakCallout('Hulk smash!');
+    } else if (chosen === 'tractor') {
       this.rickshaw = createTractor();
       this.emitToast('🚜 MILLAT TRACTOR! CRUSH ALL ROAD HAZARDS FOR 10s!');
       this.sound.speakCallout('Millat Tractor power!');
@@ -4268,6 +5424,10 @@ export class SubwayRickshawEngine {
     this.rickshaw.position.copy(oldP);
     this.rickshaw.rotation.copy(oldR);
     patchObjectHierarchy(this.rickshaw);
+    if (this.playerShieldBubble) {
+      this.rickshaw.add(this.playerShieldBubble);
+      this.syncShieldBubbleVisuals();
+    }
     this.scene.add(this.rickshaw);
     this.notifyStats();
   }
@@ -4286,25 +5446,31 @@ export class SubwayRickshawEngine {
     this.rickshaw.position.copy(oldP);
     this.rickshaw.rotation.copy(oldR);
     patchObjectHierarchy(this.rickshaw);
+    if (this.playerShieldBubble) {
+      this.rickshaw.add(this.playerShieldBubble);
+      this.syncShieldBubbleVisuals();
+    }
     this.scene.add(this.rickshaw);
 
-    this.emitToast('✨ REVERTED TO NORMAL VEHICLE (1s INVULNERABLE)');
+    this.emitToast('✨ REVERTED TO HERO (1s INVULNERABLE)');
     this.notifyStats();
   }
 
   public setRickshawSkin(skinId: RickshawSkin) {
     this.currentSkin = skinId;
     localStorage.setItem('rickshaw_current_skin', skinId);
-    if (this.activeVehicle === 'rickshaw') {
-      const oldP = this.rickshaw.position.clone();
-      const oldR = this.rickshaw.rotation.clone();
-      this.scene.remove(this.rickshaw);
-      this.rickshaw = createDetailedRickshaw(skinId);
-      this.rickshaw.position.copy(oldP);
-      this.rickshaw.rotation.copy(oldR);
-      patchObjectHierarchy(this.rickshaw);
-      this.scene.add(this.rickshaw);
+    const oldP = this.rickshaw.position.clone();
+    const oldR = this.rickshaw.rotation.clone();
+    this.scene.remove(this.rickshaw);
+    this.rickshaw = this.createPlayerVehicleMesh(this.activeVehicle, skinId);
+    this.rickshaw.position.copy(oldP);
+    this.rickshaw.rotation.copy(oldR);
+    patchObjectHierarchy(this.rickshaw);
+    if (this.playerShieldBubble) {
+      this.rickshaw.add(this.playerShieldBubble);
+      this.syncShieldBubbleVisuals();
     }
+    this.scene.add(this.rickshaw);
     this.notifyStats();
   }
 

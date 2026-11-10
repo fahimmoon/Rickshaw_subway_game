@@ -104,8 +104,9 @@ export function registerFlyoverSpan(
     if (rampLanes[i] < minLaneIdx) minLaneIdx = rampLanes[i];
     if (rampLanes[i] > maxLaneIdx) maxLaneIdx = rampLanes[i];
   }
-  const minRampX = GAME_CONFIG.LANES[minLaneIdx] - 2.0;
-  const maxRampX = GAME_CONFIG.LANES[maxLaneIdx] + 2.0;
+  const halfLane = (GAME_CONFIG.LANE_WIDTH ?? 3.5) * 0.5;
+  const minRampX = GAME_CONFIG.LANES[minLaneIdx] - halfLane;
+  const maxRampX = GAME_CONFIG.LANES[maxLaneIdx] + halfLane;
 
   const span: FlyoverSpan = {
     id: _nextFlyoverId++,
@@ -248,8 +249,9 @@ export function getGroundOpenBoundsForSpan(span: FlyoverSpan): { minX: number; m
     if (idx < minIdx) minIdx = idx;
     if (idx > maxIdx) maxIdx = idx;
   }
-  _scratchBounds.minX = GAME_CONFIG.LANES[minIdx] - 1.95;
-  _scratchBounds.maxX = GAME_CONFIG.LANES[maxIdx] + 1.95;
+  const halfLane = (GAME_CONFIG.LANE_WIDTH ?? 3.5) * 0.5 - 0.05;
+  _scratchBounds.minX = GAME_CONFIG.LANES[minIdx] - halfLane;
+  _scratchBounds.maxX = GAME_CONFIG.LANES[maxIdx] + halfLane;
   return _scratchBounds;
 }
 

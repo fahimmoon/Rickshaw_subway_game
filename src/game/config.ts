@@ -1,3 +1,7 @@
+import { LANE_WIDTH, LANE_CENTERS, VEHICLE_SPECS } from './constants';
+
+export { LANE_WIDTH, LANE_CENTERS, VEHICLE_SPECS };
+
 export const ROAD_Y = 0;
 export const SIDEWALK_Y = 0.2;
 export const GROUND_Y = -0.05;
@@ -18,12 +22,62 @@ export const RAIL_HEIGHT = 0.95;
  *   - Directional chevrons and arrows on the ramp surface point toward `-Z`.
  */
 export const RAMP_TRAVEL_DIR_Z = -1 as const;
-export const BUS_BODY_LENGTH = 9.0;
-export const BUS_ROOF_HEIGHT = 2.8;
-export const BUS_RAMP_LENGTH = 5.2;
-export const BUS_RAMP_LOW_OFFSET_Z = 4.2 + BUS_RAMP_LENGTH; // +9.4m (low end at road level, reached first)
-export const BUS_RAMP_HIGH_OFFSET_Z = 4.2;                  // +4.2m (high end meeting bus rear roof at y = 2.8m)
-export const BUS_ROOF_FRONT_OFFSET_Z = -4.5;                // -4.5m (front edge of bus roof)
+export const BUS_BODY_LENGTH = VEHICLE_SPECS.bus.length; // 10.0m
+export const BUS_ROOF_HEIGHT = VEHICLE_SPECS.bus.height; // 3.2m
+export const BUS_RAMP_LENGTH = 5.5;
+export const BUS_RAMP_LOW_OFFSET_Z = 5.0 + BUS_RAMP_LENGTH; // +10.5m (low end at road level, reached first)
+export const BUS_RAMP_HIGH_OFFSET_Z = 5.0;                  // +5.0m (high end meeting bus rear roof at y = 3.2m)
+export const BUS_ROOF_FRONT_OFFSET_Z = -5.0;                // -5.0m (front edge of bus roof)
+
+// PERF: Central performance configuration & Stage 3 object pool caps
+export const PERF_CONFIG = {
+  MAX_ACTIVE_NPCS: 20,                       // Max active pedestrians/NPCs on screen
+  MAX_ACTIVE_VEHICLES: 10,                   // Max active AI traffic vehicles on screen
+  MAX_ACTIVE_PARTICLES: 150,                 // Max active pooled particle meshes/points
+  MAX_ACTIVE_COINS: 65,                      // Max pooled coins
+  MAX_ACTIVE_POPUPS: 8,                      // Max pooled UI/toast popups
+  VISIBLE_ROAD_CHUNKS: 7,                    // 6-8 visible road chunks (350m active track)
+  CHUNK_PIECES_PER_FRAME: 1,                 // Spread chunk content generation: 1 piece per frame (zero spikes)
+  DESKTOP_MAX_DPR: 1.5,                      // Cap pixel ratio at 1.5 on desktop
+  MOBILE_MAX_DPR: 1.15,                      // Cap pixel ratio at 1.15 on mobile
+  TARGET_DRAW_CALLS_MOBILE: 150,
+  TARGET_DRAW_CALLS_DESKTOP: 300,
+  FRAME_TIME_WARN_MS: 25.0,                  // Warn in console if frame time > 25 ms
+  LOW_POLY_SEGMENTS: 7,                      // 6-8 segments for low-poly cylinders/spheres
+  SHARED_PALETTE_SIZE: 16,                   // Small shared material palette target
+  PRESETS: {
+    LOW: {
+      pixelRatio: 1.0,
+      shadows: false,
+      maxParticles: 60,
+      viewDistance: 160,
+      maxNPCs: 12,
+      maxVehicles: 6,
+      propDensity: 0.5,
+      postProcessing: false
+    },
+    MEDIUM: {
+      pixelRatio: 1.25,
+      shadows: false,
+      maxParticles: 110,
+      viewDistance: 210,
+      maxNPCs: 16,
+      maxVehicles: 8,
+      propDensity: 0.8,
+      postProcessing: false
+    },
+    HIGH: {
+      pixelRatio: 1.5,
+      shadows: false,
+      maxParticles: 150,
+      viewDistance: 250,
+      maxNPCs: 20,
+      maxVehicles: 10,
+      propDensity: 1.0,
+      postProcessing: false
+    }
+  }
+} as const;
 
 export const GAME_CONFIG = {
   ROAD_Y,
@@ -35,8 +89,9 @@ export const GAME_CONFIG = {
   RAMP_SLOPE,
   DECK_CLEARANCE,
   RAIL_HEIGHT,
-  LANES: [-4.0, 0, 4.0] as number[],        // Left (-4m), Center (0m), Right (+4m)
-  SHORTCUT_LANES: [-2.2, 2.2] as number[],   // 2-lane narrow alleyway for shortcuts
+  LANE_WIDTH,
+  LANES: LANE_CENTERS as number[],           // Left (-3.5m), Center (0m), Right (+3.5m)
+  SHORTCUT_LANES: [-1.75, 1.75] as number[], // 2-lane narrow alleyway for shortcuts
   LANE_SWITCH_SPEED: 22,                     // Rapid, responsive lane switching
   BASE_SPEED: 18,                            // Starting speed in units/s (18 units/s)
   MAX_SPEED: 48,                             // Top speed in units/s (48 units/s)
@@ -47,16 +102,16 @@ export const GAME_CONFIG = {
   NORMAL_JUMP: 13.5,                         // Standard jump impulse
   SUPER_JUMP: 21.6,                          // Super Khussa jump impulse (13.5 * 1.6)
   GRAVITY: 36.0,                             // Platformer gravity
-  ROAD_WIDTH: 14.0,                          // 3-lane road width (m)
+  ROAD_WIDTH: 12.0,                          // 3-lane road width (3 * 3.5m = 10.5m + 0.75m shoulders)
   CHUNK_LENGTH: 50.0,                        // Length of each road chunk
-  ACTIVE_CHUNKS: 10,                         // Active road chunks in memory (500m total track)
-  CHUNKS_AHEAD_MIN: 7,                       // Guarantee at least 7 chunks (350m) ahead of player
-  CHUNK_GENERATION_MAX_PER_FRAME: 4,         // Max chunks to spawn/recycle per frame to prevent frame spikes
+  ACTIVE_CHUNKS: PERF_CONFIG.VISIBLE_ROAD_CHUNKS, // PERF: 7 visible road chunks (350m total track)
+  CHUNKS_AHEAD_MIN: 5,                       // Guarantee at least 5 chunks ahead of player
+  CHUNK_GENERATION_MAX_PER_FRAME: 1,         // PERF: Max 1 chunk piece per frame to prevent frame spikes
   DESPAWN_DISTANCE: 40.0,                    // Distance behind camera before recycling
   FLOATING_ORIGIN_THRESHOLD: 25000.0,        // Shift origin only after 25km (prevents premature coordinate shifting)
   FOG_COLOR: 0x7dd3fc,                       // Bright sunny blue horizon fog
-  FOG_NEAR: 140,                             // Soft fog start
-  FOG_FAR: 380,                              // Horizon fog end (fully masked within 500m track)
+  FOG_NEAR: 120,                             // Soft fog start
+  FOG_FAR: 260,                              // Horizon fog end (fully masked within 350m track)
   // Police Chase Tuning
   POLICE_GAP_SAFE: 14.0,                     // Safe distance behind rickshaw
   POLICE_GAP_CLOSE: 5.0,                     // Danger gap after stumble/scrape
@@ -359,9 +414,24 @@ export type PowerupType =
   | PickupVariantId;
 
 export type GameState = 'START' | 'RUNNING' | 'PAUSED' | 'GAMEOVER';
-export type RickshawSkin = 'badshahi' | 'karachi' | 'peshawar' | 'cyber';
-export type VehicleId = 'rickshaw' | 'bolan' | 'truck' | 'motorbike' | 'chingchi';
-export type MysteryVehicleId = 'tractor' | 'tonga';
+export type RickshawSkin = 'badshahi' | 'karachi' | 'peshawar' | 'cyber' | 'multan' | 'swat';
+export type NeonColorId = 'none' | 'emerald' | 'cyan' | 'gold' | 'magenta';
+export type VehicleId =
+  | 'tuner_car'
+  | 'honda_del_sol'
+  | 'muscle_car'
+  | 'gt_racer'
+  | 'lamborghini'
+  | 'spiderman'
+  | 'ironman'
+  | 'captain_america'
+  | 'thor'
+  | 'rickshaw'
+  | 'bolan'
+  | 'truck'
+  | 'motorbike'
+  | 'chingchi';
+export type MysteryVehicleId = 'hulk' | 'tractor' | 'tonga';
 export type WeatherType = 'SUNNY' | 'GOLDEN' | 'MONSOON' | 'NIGHT';
 
 export interface SkinInfo {
@@ -379,12 +449,26 @@ export interface SkinInfo {
   };
 }
 
+export interface NeonInfo {
+  id: NeonColorId;
+  name: string;
+  description: string;
+  price: number;
+  hex: number;
+  cssColor: string;
+}
+
 export interface UpgradesState {
-  magnetLevel: number;         // 1 to 5: +2.5s duration per level
-  jetpackLevel: number;        // 1 to 5: +2s duration & +10% speed
-  hydraulicLevel: number;      // 1 to 5: +15% hydraulic jump boost & suspension cushion
-  starterShield: number;       // 0 to 3: start runs with extra shield charges
+  magnetLevel: number;          // 1 to 5: +2.5s duration per level
+  jetpackLevel: number;         // 1 to 5: +2s duration & +10% speed
+  hydraulicLevel: number;       // 1 to 5: +15% hydraulic jump boost & suspension cushion
+  starterShield: number;        // 0 to 3: start runs with extra shield charges
   fuelEfficiencyLevel?: number; // 1 to 5: reduces fuel drain rate by 8% per level
+  chaiHeadstartCount?: number;  // Consumable: start run with 100% Chai Nitro & 6s Turbo
+  reserveFuelCount?: number;    // Consumable: auto-refill +65% fuel when tank hits 0%
+  wardenBribeCount?: number;    // Consumable: auto-forgive 1 fatal crash / arrest
+  activeNeon?: NeonColorId;     // Equipped 3D underglow neon color
+  unlockedNeons?: NeonColorId[];
 }
 
 export interface Quest {

@@ -40,6 +40,8 @@ import confetti from 'canvas-confetti';
 import { SubwayRickshawEngine, GameStats } from './game/engine';
 import {
   RickshawSkin,
+  NeonColorId,
+  NeonInfo,
   WeatherType,
   UpgradesState,
   Quest,
@@ -95,7 +97,33 @@ const SKINS_DEF: SkinInfo[] = [
     price: 800,
     unlocked: false,
     colors: { body: 0x7c3aed, trim: 0xfacc15, canopy: 0x3b0764, accent: '#7c3aed' }
+  },
+  {
+    id: 'multan',
+    name: 'Multan Blue Pottery',
+    city: 'Multan Shahi Bazaar',
+    description: 'Hand-glazed cobalt & turquoise Kashi-kari ceramic tilework with ivory trim.',
+    price: 550,
+    unlocked: false,
+    colors: { body: 0x1d4ed8, trim: 0x38bdf8, canopy: 0x1e3a8a, accent: '#1d4ed8' }
+  },
+  {
+    id: 'swat',
+    name: 'Swat Emerald Phulkari',
+    city: 'Mingora Valley',
+    description: 'Alpine jade green & golden silk embroidery motifs inspired by Swat Valley.',
+    price: 650,
+    unlocked: false,
+    colors: { body: 0x10b981, trim: 0xfde047, canopy: 0x064e3b, accent: '#10b981' }
   }
+];
+
+const NEONS_DEF: NeonInfo[] = [
+  { id: 'none', name: 'Factory Stock (No Neon)', price: 0, hex: '#475569' },
+  { id: 'emerald', name: 'Lahore Emerald Underglow', price: 200, hex: '#10b981' },
+  { id: 'cyan', name: 'Karachi Sea Cyan Underglow', price: 250, hex: '#06b6d4' },
+  { id: 'gold', name: 'Badshahi Shahi Gold Underglow', price: 350, hex: '#facc15' },
+  { id: 'magenta', name: 'Cyber Mall Magenta Underglow', price: 450, hex: '#ec4899' }
 ];
 
 const DEFAULT_QUESTS: Quest[] = [
@@ -208,7 +236,35 @@ export default function App() {
     debugBaseMarkers: false,
     debugHeightOverlay: false,
     debugWireframe: false,
-    unpatchedCount: 0
+    debugBoundingBoxes: false,
+    isShowroomMode: false,
+    showroomValidationResults: [],
+    unpatchedCount: 0,
+    chaiNitroCharge: 35,
+    isNitroActive: false,
+    nitroTimer: 0,
+    roadsideOrdersServed: 0,
+    isNPCGalleryOpen: false,
+    isShopGalleryOpen: false,
+    isBuildingGalleryOpen: false,
+    buildingGalleryStage: 0,
+    currentDistrict: 'Saddar & Empress Mkt',
+    streakCount: 0,
+    showPerfOverlay: false,
+    perfMetrics: {
+      fps: 60,
+      frameTimeMs: 16.6,
+      drawCalls: 0,
+      triangles: 0,
+      geometries: 0,
+      textures: 0,
+      jsHeapMB: null,
+      activeNPCs: 0,
+      activeVehicles: 0,
+      activeProps: 0,
+      activeParticles: 0,
+      leakWarning: false
+    }
   });
 
   const [isMuted, setIsMuted] = useState(false);
@@ -216,7 +272,11 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [showGarage, setShowGarage] = useState(false);
-  const [garageTab, setGarageTab] = useState<'VEHICLES' | 'SKINS' | 'UPGRADES'>('VEHICLES');
+  const [garageTab, setGarageTab] = useState<'VEHICLES' | 'SKINS' | 'UPGRADES' | 'BAZAAR'>('VEHICLES');
+  const [dailyEidiClaimed, setDailyEidiClaimed] = useState<boolean>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return localStorage.getItem('rickshaw_daily_eidi_date') === today;
+  });
   const [showQuests, setShowQuests] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [unlockedVehicles, setUnlockedVehicles] = useState<VehicleId[]>(() => getUnlockedVehicles());
@@ -398,6 +458,96 @@ export default function App() {
         return;
       }
 
+      // Stage 0 Performance Telemetry Overlay Toggle (Key F)
+      if (e.code === 'KeyF' && !isDebugOpen) {
+        e.preventDefault();
+        engine.togglePerfOverlay();
+        return;
+      }
+
+      // Key G: Toggle 3D Karachi Street NPC Gallery (showNPCGallery)
+      if (e.code === 'KeyG' && !isDebugOpen) {
+        e.preventDefault();
+        engine.toggleNPCGallery();
+        return;
+      }
+
+      if (engine.isNPCGalleryOpen && e.code === 'Escape') {
+        e.preventDefault();
+        engine.setNPCGalleryMode(false);
+        return;
+      }
+
+      // Key H: Toggle 3D Pakistani Bazaar Shop Gallery (showShopGallery) when on Start screen, or Shift+H anytime
+      if (e.code === 'KeyH' && !isDebugOpen && (currentStats.state !== 'RUNNING' || e.shiftKey || engine.isShopGalleryOpen)) {
+        e.preventDefault();
+        engine.toggleShopGallery();
+        return;
+      }
+
+      if (engine.isShopGalleryOpen && e.code === 'Escape') {
+        e.preventDefault();
+        engine.setShopGalleryMode(false);
+        return;
+      }
+
+      // Key B: Toggle 3D Pakistani Skyline Building Gallery (showBuildingGallery), or Shift+B for Vehicle Box3 Debug
+      if (e.code === 'KeyB') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          engine.toggleBoundingBoxDebug();
+        } else {
+          engine.toggleBuildingGallery();
+        }
+        return;
+      }
+
+      if (engine.isBuildingGalleryOpen) {
+        if (e.code === 'Digit1') {
+          e.preventDefault();
+          engine.setBuildingGalleryStage(1);
+          return;
+        }
+        if (e.code === 'Digit2') {
+          e.preventDefault();
+          engine.setBuildingGalleryStage(2);
+          return;
+        }
+        if (e.code === 'Digit3') {
+          e.preventDefault();
+          engine.setBuildingGalleryStage(3);
+          return;
+        }
+        if (e.code === 'Digit0') {
+          e.preventDefault();
+          engine.setBuildingGalleryStage(0);
+          return;
+        }
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          engine.setBuildingGalleryMode(false);
+          return;
+        }
+      }
+
+      if (engine.isShowroomMode) {
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
+          e.preventDefault();
+          engine.cycleShowroomFocus(-1);
+          return;
+        }
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') {
+          e.preventDefault();
+          engine.cycleShowroomFocus(1);
+          return;
+        }
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          engine.setShowroomMode(false);
+          return;
+        }
+      }
+
       // When Debug Overlay is active, route debug hotkeys (H, C, L, K, G, F) while still allowing normal driving!
       if (isDebugOpen) {
         if (e.code === 'KeyH') {
@@ -487,6 +637,19 @@ export default function App() {
           e.preventDefault();
           engine.activateShield();
           break;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+        case 'KeyN':
+          e.preventDefault();
+          engine.activateChaiNitro();
+          break;
+        case 'KeyO':
+          e.preventDefault();
+          if (currentStats.state === 'RUNNING') {
+            engine.pause();
+          }
+          setShowGarage(true);
+          break;
         case 'KeyH':
           e.preventDefault();
           engine.honkHorn();
@@ -519,11 +682,22 @@ export default function App() {
     };
   }, []);
 
-  // Enhanced Mobile Touch & Swipe Handling (Instant low-threshold response)
+  // Enhanced Mobile Touch & Swipe Handling (Instant low-threshold response) + Stage 0 Triple-Tap Perf Toggle
   const touchStartPos = useRef<{ x: number; y: number; time: number } | null>(null);
+  const tapTimesRef = useRef<number[]>([]);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    touchStartPos.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+    const now = Date.now();
+    touchStartPos.current = { x: e.clientX, y: e.clientY, time: now };
+
+    // Triple-tap within 550ms toggles Stage 0 Performance Telemetry Overlay
+    const recentTaps = tapTimesRef.current.filter((t) => now - t < 550);
+    recentTaps.push(now);
+    tapTimesRef.current = recentTaps;
+    if (recentTaps.length >= 3) {
+      tapTimesRef.current = [];
+      engineRef.current?.togglePerfOverlay();
+    }
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -635,6 +809,75 @@ export default function App() {
     }
   };
 
+  // Rent / Test-Drive any locked vehicle for 50 PKR
+  const rentVehicleTestDrive = (veh: VehicleDef) => {
+    if (!engineRef.current) return;
+    const rentPrice = 50;
+    if (stats.totalRupees >= rentPrice) {
+      if (engineRef.current.spendRupees(rentPrice)) {
+        engineRef.current.setVehicle(veh.id);
+        setSelectedVehicleState(veh.id);
+        engineRef.current.sound.playPowerup();
+        triggerToast(`🔑 Rented ${veh.name} for Test Drive!`);
+      }
+    } else {
+      triggerToast(`⚠️ Need ${rentPrice - stats.totalRupees} more Rupees to Rent!`);
+    }
+  };
+
+  // Unlock / Equip 3D Neon Underglow Kit
+  const selectNeonKit = (neon: NeonInfo) => {
+    if (!engineRef.current) return;
+    const unlockedList = upgrades.unlockedNeons || ['none'];
+    if (unlockedList.includes(neon.id) || neon.price === 0) {
+      const newUpgrades: UpgradesState = { ...upgrades, activeNeon: neon.id, unlockedNeons: unlockedList };
+      setUpgrades(newUpgrades);
+      engineRef.current.setUpgrades(newUpgrades);
+      engineRef.current.setNeonColor(neon.id);
+      triggerToast(`✨ Equipped: ${neon.name}!`);
+      return;
+    }
+    if (stats.totalRupees >= neon.price) {
+      if (engineRef.current.spendRupees(neon.price)) {
+        const nextUnlocked = [...unlockedList, neon.id];
+        const newUpgrades: UpgradesState = {
+          ...upgrades,
+          activeNeon: neon.id,
+          unlockedNeons: nextUnlocked
+        };
+        setUpgrades(newUpgrades);
+        engineRef.current.setUpgrades(newUpgrades);
+        engineRef.current.setNeonColor(neon.id);
+        engineRef.current.sound.playQuestComplete();
+        confetti({ particleCount: 55, spread: 70, origin: { y: 0.5 } });
+        triggerToast(`🌟 Unlocked & Equipped: ${neon.name}!`);
+      }
+    } else {
+      triggerToast(`⚠️ Need ${neon.price - stats.totalRupees} more Rupees!`);
+    }
+  };
+
+  // Claim Free Daily Eidi Gift (+150 PKR) in Open Bazaar
+  const claimDailyEidi = () => {
+    if (!engineRef.current || dailyEidiClaimed) return;
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem('rickshaw_daily_eidi_date', today);
+    setDailyEidiClaimed(true);
+    engineRef.current.addBankedRupees(150);
+    engineRef.current.sound.playQuestComplete();
+    confetti({ particleCount: 70, spread: 80, origin: { y: 0.5 } });
+    triggerToast('🎁 DAILY BAZAAR EIDI CLAIMED: +150 PKR!');
+  };
+
+  // Open Shop helper (auto-pauses if called during active run)
+  const openShopModal = (initialTab: 'VEHICLES' | 'SKINS' | 'UPGRADES' | 'BAZAAR' = 'VEHICLES') => {
+    if (engineRef.current && stats.state === 'RUNNING') {
+      engineRef.current.pause();
+    }
+    setGarageTab(initialTab);
+    setShowGarage(true);
+  };
+
   // Headless pattern validator runner
   const handleRunHeadlessTest = () => {
     const res = runHeadlessPatternValidation(10000);
@@ -673,6 +916,46 @@ export default function App() {
     >
       {/* Three.js Canvas */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block z-0" />
+
+      {/* STAGE 0 TINY PERFORMANCE TELEMETRY OVERLAY (Toggle with Key F or Triple-Tap) */}
+      {stats.showPerfOverlay && (
+        <div className="absolute top-28 left-2.5 z-50 bg-stone-950/90 border border-emerald-500/70 rounded-xl px-2.5 py-2 text-[10px] font-mono text-stone-200 shadow-xl pointer-events-auto leading-tight">
+          <div className="flex items-center justify-between gap-3 border-b border-stone-800 pb-1 mb-1">
+            <span className="font-bold text-emerald-400">⚡ PERF [KEY F / 3-TAP]</span>
+            <span
+              className={`px-1.5 py-0.2 rounded font-bold ${
+                stats.perfMetrics.frameTimeMs > 25
+                  ? 'bg-rose-600 text-white'
+                  : stats.perfMetrics.frameTimeMs > 18
+                  ? 'bg-amber-500 text-stone-950'
+                  : 'bg-emerald-600 text-white'
+              }`}
+            >
+              {stats.perfMetrics.fps} FPS ({stats.perfMetrics.frameTimeMs} ms)
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <span>Draw Calls: <strong className="text-amber-300">{stats.perfMetrics.drawCalls}</strong></span>
+            <span>Triangles: <strong className="text-amber-300">{stats.perfMetrics.triangles.toLocaleString()}</strong></span>
+            <span>Geometries: <strong className="text-cyan-300">{stats.perfMetrics.geometries}</strong></span>
+            <span>Textures: <strong className="text-cyan-300">{stats.perfMetrics.textures}</strong></span>
+            <span>
+              JS Heap:{' '}
+              <strong className="text-purple-300">
+                {stats.perfMetrics.jsHeapMB !== null ? `${stats.perfMetrics.jsHeapMB} MB` : 'N/A'}
+              </strong>
+            </span>
+            <span>NPCs: <strong className="text-emerald-300">{stats.perfMetrics.activeNPCs}</strong></span>
+            <span>Vehicles: <strong className="text-emerald-300">{stats.perfMetrics.activeVehicles}</strong></span>
+            <span>Props/Particles: <strong className="text-emerald-300">{stats.perfMetrics.activeProps}/{stats.perfMetrics.activeParticles}</strong></span>
+          </div>
+          {stats.perfMetrics.leakWarning && (
+            <div className="mt-1 px-1.5 py-0.5 bg-rose-900/90 border border-rose-400 text-rose-200 rounded text-[9px] font-bold">
+              ⚠️ GPU GEOMETRY/TEXTURE GROWTH DETECTED
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Underpass Ambient Vignette (when driving on level 0 beneath an elevated flyover deck) */}
       {stats.inUnderpass && stats.verticalLevel === 0 && (
@@ -786,6 +1069,46 @@ export default function App() {
               </div>
             )}
 
+            {/* Open Dhaba Chai Nitro Overdrive Meter & Trigger Button */}
+            <button
+              onClick={() => engineRef.current?.activateChaiNitro()}
+              className={`px-3 py-1.5 rounded-2xl border shadow-lg text-left transition-all cursor-pointer active:scale-95 ${
+                stats.isNitroActive
+                  ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-cyan-400 text-slate-950 border-white animate-pulse'
+                  : stats.chaiNitroCharge >= 50
+                  ? 'bg-slate-900/90 border-amber-400 text-amber-200 hover:bg-slate-800'
+                  : 'bg-slate-900/80 border-slate-700 text-slate-300'
+              }`}
+              title="Honk [H] at Open Roadside Shops or Near-Miss traffic to charge Chai Nitro! Press [Shift] or [N] at 50%+ to unleash Turbo Overdrive!"
+            >
+              <div className="flex items-center justify-between gap-2 text-[9px] font-black font-arcade uppercase">
+                <span>
+                  {stats.isNitroActive
+                    ? `🔥 CHAI NITRO OVERDRIVE (${stats.nitroTimer.toFixed(1)}s)`
+                    : stats.chaiNitroCharge >= 50
+                    ? '☕ NITRO READY! [SHIFT / N]'
+                    : '🍵 DHABA CHAI NITRO'}
+                </span>
+                <span className="font-mono text-xs">
+                  {stats.isNitroActive ? 'TURBO' : `${stats.chaiNitroCharge}%`}
+                </span>
+              </div>
+              <div className="w-32 h-2 bg-slate-800 rounded-full overflow-hidden mt-0.5 border border-slate-700">
+                <div
+                  className={`h-full transition-all duration-200 ${
+                    stats.isNitroActive
+                      ? 'bg-slate-950'
+                      : stats.chaiNitroCharge >= 50
+                      ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-cyan-400'
+                      : 'bg-amber-500/70'
+                  }`}
+                  style={{
+                    width: `${stats.isNitroActive ? 100 : Math.min(100, Math.max(0, stats.chaiNitroCharge))}%`
+                  }}
+                />
+              </div>
+            </button>
+
             {stats.scoreMultiplier > 1 && (
               <div className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-red-500 text-white font-black font-arcade text-xs px-2.5 py-1 rounded-xl shadow-md animate-pulse">
                 <Sparkles className="w-3.5 h-3.5" />
@@ -892,6 +1215,16 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Instant Open Shop & Bazaar Button */}
+              <button
+                onClick={() => openShopModal('BAZAAR')}
+                className="px-3 py-2 bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-slate-950 font-black font-arcade text-[10px] sm:text-xs rounded-2xl border border-yellow-200 shadow-lg transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5"
+                title="Open 3D Garage & Street Bazaar Shop [O]"
+              >
+                <span>🛒</span>
+                <span className="hidden sm:inline">OPEN SHOP</span>
+              </button>
+
               {/* Weather Switcher Button */}
               <button
                 onClick={cycleWeather}
@@ -923,8 +1256,16 @@ export default function App() {
               </button>
             </div>
 
-            {/* Speedometer and Time of Day badge */}
-            <div className="flex items-center gap-2">
+            {/* Karachi Highway District Signboard, Speedometer & Time of Day */}
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <div className="flex items-center gap-1 bg-emerald-900/95 text-white border border-white/60 px-2.5 py-0.5 rounded-lg text-[11px] font-bold tracking-wide shadow">
+                <span>🛣️ {stats.currentDistrict}</span>
+              </div>
+              {stats.streakCount > 1 && (
+                <div className="flex items-center gap-1 bg-amber-500 text-stone-950 px-2 py-0.5 rounded-lg text-[11px] font-black font-arcade animate-bounce">
+                  <span>🔥 {stats.streakCount}x STREAK</span>
+                </div>
+              )}
               <div className="flex items-center gap-1.5 bg-slate-900/80 backdrop-blur-sm text-amber-300 border border-amber-500/20 px-2 py-0.5 rounded-lg text-xs font-semibold">
                 <span>🌆 {stats.timeOfDay}</span>
               </div>
@@ -1012,7 +1353,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* Center Action: Horn & Shield */}
+          {/* Center Action: Horn, Chai Nitro & Shield */}
           <div className="flex items-center gap-2 pointer-events-auto">
             <button
               onClick={() => engineRef.current?.honkHorn()}
@@ -1026,6 +1367,20 @@ export default function App() {
             >
               <Radio className="w-5 h-5" />
               <span>{stats.hornCooldown > 0 ? `${stats.hornCooldown.toFixed(1)}s` : 'HORN'}</span>
+            </button>
+            <button
+              onClick={() => engineRef.current?.activateChaiNitro()}
+              className={`w-12 h-12 rounded-xl border flex flex-col items-center justify-center shadow-lg active:scale-90 transition-transform font-bold text-[10px] ${
+                stats.isNitroActive
+                  ? 'bg-amber-400 text-slate-950 border-white animate-pulse'
+                  : stats.chaiNitroCharge >= 50
+                  ? 'bg-gradient-to-b from-amber-500 to-orange-600 text-slate-950 border-yellow-200 cursor-pointer'
+                  : 'bg-slate-800/80 text-slate-400 border-slate-700'
+              }`}
+              aria-label="Activate Chai Nitro"
+            >
+              <Flame className="w-5 h-5" />
+              <span>{stats.chaiNitroCharge}%</span>
             </button>
             <button
               onClick={() => engineRef.current?.activateShield()}
@@ -1057,33 +1412,33 @@ export default function App() {
         </div>
       )}
 
-      {/* START SCREEN MODAL */}
-      {stats.state === 'START' && !showGarage && !showQuests && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md">
-          <div className="relative max-w-lg w-full bg-gradient-to-b from-slate-900 to-emerald-950 p-6 sm:p-8 rounded-3xl border-4 border-amber-400 shadow-2xl shadow-emerald-950/80 text-center flex flex-col items-center">
-            {/* Truck Art Ornate Banner */}
-            <div className="inline-block bg-gradient-to-r from-red-600 via-amber-500 to-emerald-600 text-white font-arcade text-xs sm:text-sm px-4 py-1.5 rounded-full shadow-md tracking-widest uppercase mb-3 border border-yellow-200">
-              🇵🇰 SUBWAY SURFER: PAKISTANI EDITION
+      {/* START SCREEN MODAL — Grounded Karachi Saddar & M.A. Jinnah Road Street Signboard Vibe */}
+      {stats.state === 'START' && !showGarage && !showQuests && !stats.isShowroomMode && !stats.isNPCGalleryOpen && !stats.isShopGalleryOpen && !stats.isBuildingGalleryOpen && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center p-4 bg-stone-950/75 backdrop-blur-sm">
+          <div className="relative max-w-lg w-full bg-stone-900 p-6 sm:p-8 rounded-2xl border-4 border-amber-600/90 shadow-2xl text-center flex flex-col items-center">
+            {/* Karachi Highway Milestone / Route W-11 Header */}
+            <div className="inline-block bg-amber-500 text-stone-950 font-arcade font-black text-xs sm:text-sm px-4 py-1 rounded border-2 border-stone-950 shadow tracking-wider uppercase mb-3">
+              🇵🇰 KARACHI SADDAR • BURNS ROAD • M.A. JINNAH RD
             </div>
 
-            <h1 className="text-3xl sm:text-5xl font-black font-arcade text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-400 drop-shadow-md tracking-wider mb-2">
+            <h1 className="text-3xl sm:text-5xl font-black font-arcade text-amber-400 drop-shadow tracking-wider mb-1">
               RICKSHAW SURFERS
             </h1>
 
-            <p className="text-emerald-300 font-semibold text-xs sm:text-sm mb-4">
-              Lahore Mall Road & Karachi Boulevard Living City Rush
+            <p className="text-stone-300 font-semibold text-xs sm:text-sm mb-4">
+              Empress Market, Quetta Chai Dhabas & Gadha Gari Rush
             </p>
 
-            {/* Wallet & High Score Bar */}
+            {/* Wallet & High Score Bar (Sandstone & Charcoal Street Ledger) */}
             <div className="grid grid-cols-2 gap-3 w-full mb-5">
-              <div className="flex items-center justify-center gap-2 bg-slate-800/90 px-3 py-2 rounded-2xl border border-amber-400/40 text-amber-300 text-xs font-mono">
+              <div className="flex items-center justify-center gap-2 bg-stone-800 px-3 py-2 rounded-xl border border-amber-600/50 text-amber-300 text-xs font-mono">
                 <Trophy className="w-4 h-4 text-amber-400" />
-                <span>RECORD:</span>
+                <span>MILESTONE:</span>
                 <strong className="text-amber-400 font-arcade text-sm">{stats.bestScore} m</strong>
               </div>
-              <div className="flex items-center justify-center gap-2 bg-slate-800/90 px-3 py-2 rounded-2xl border border-yellow-400/40 text-yellow-300 text-xs font-mono">
+              <div className="flex items-center justify-center gap-2 bg-stone-800 px-3 py-2 rounded-xl border border-emerald-600/50 text-emerald-300 text-xs font-mono">
                 <Coins className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                <span>WALLET:</span>
+                <span>GALLA (CASH):</span>
                 <strong className="text-yellow-400 font-arcade text-sm">{stats.totalRupees} PKR</strong>
               </div>
             </div>
@@ -1091,56 +1446,263 @@ export default function App() {
             {/* Main Action Start Button */}
             <button
               onClick={() => engineRef.current?.start()}
-              className="w-full py-4 px-6 bg-gradient-to-r from-emerald-500 via-amber-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 active:scale-95 text-slate-950 font-black font-arcade text-xl sm:text-2xl rounded-2xl shadow-xl shadow-amber-500/30 flex items-center justify-center gap-3 transition-transform cursor-pointer border-2 border-yellow-200 mb-4"
+              className="w-full py-4 px-6 bg-amber-500 hover:bg-amber-400 active:scale-95 text-stone-950 font-black font-arcade text-xl sm:text-2xl rounded-xl shadow-lg flex items-center justify-center gap-3 transition-transform cursor-pointer border-2 border-stone-950 mb-4"
             >
-              <Play className="w-7 h-7 fill-slate-950" />
-              <span>START RACE!</span>
+              <Play className="w-7 h-7 fill-stone-950" />
+              <span>START SADDAR RUN!</span>
             </button>
 
             {/* Garage & Quests Action Buttons */}
             <div className="grid grid-cols-2 gap-3 w-full mb-4">
               <button
                 onClick={() => setShowGarage(true)}
-                className="py-2.5 px-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm shadow-lg border border-purple-300/40 cursor-pointer active:scale-95 transition-transform"
+                className="py-2.5 px-4 bg-emerald-800 hover:bg-emerald-700 text-amber-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm shadow border border-emerald-500/50 cursor-pointer active:scale-95 transition-transform"
               >
-                <Palette className="w-4 h-4 text-yellow-300" />
-                <span>GARAGE & SHOP</span>
+                <Palette className="w-4 h-4 text-amber-300" />
+                <span>USTAD GARAGE & BAZAAR</span>
               </button>
 
               <button
                 onClick={() => setShowQuests(true)}
-                className="py-2.5 px-4 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-slate-950 font-black rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm shadow-lg border border-yellow-200 cursor-pointer active:scale-95 transition-transform"
+                className="py-2.5 px-4 bg-stone-800 hover:bg-stone-700 text-amber-300 font-black rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm shadow border border-amber-500/50 cursor-pointer active:scale-95 transition-transform"
               >
-                <Award className="w-4 h-4 fill-slate-950" />
-                <span>MISSIONS</span>
+                <Award className="w-4 h-4 text-amber-400" />
+                <span>DAILY ROUTE TASKS</span>
               </button>
             </div>
 
             {/* Helper controls row */}
-            <div className="flex items-center justify-between w-full pt-3 border-t border-emerald-800/60 text-xs text-emerald-200/90 font-medium">
+            <div className="flex flex-wrap items-center justify-between gap-2 w-full pt-3 border-t border-stone-700 text-xs text-stone-300 font-medium">
               <button
                 onClick={() => setShowHowToPlay(true)}
                 className="flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
               >
                 <HelpCircle className="w-4 h-4 text-amber-400" />
-                <span>Controls Guide</span>
+                <span>Controls</span>
               </button>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => engineRef.current?.toggleBuildingGallery()}
+                  className="px-2.5 py-1 bg-cyan-900/90 rounded-lg border border-cyan-400/70 text-cyan-200 text-xs flex items-center gap-1 hover:bg-cyan-800 cursor-pointer font-bold"
+                  title="Preview all 12 Pakistani Skyline & Set-Piece Buildings in 3D (Key B)"
+                >
+                  <span>🏙️ Buildings [B]</span>
+                </button>
+                <button
+                  onClick={() => engineRef.current?.toggleShopGallery()}
+                  className="px-2.5 py-1 bg-emerald-900/90 rounded-lg border border-emerald-400/70 text-emerald-200 text-xs flex items-center gap-1 hover:bg-emerald-800 cursor-pointer font-bold"
+                  title="Preview all 12 Pakistani Bazaar Shop Buildings side-by-side in 3D (Key H)"
+                >
+                  <span>🏪 Shops [H]</span>
+                </button>
+                <button
+                  onClick={() => engineRef.current?.toggleNPCGallery()}
+                  className="px-2.5 py-1 bg-amber-900/90 rounded-lg border border-amber-400/70 text-amber-200 text-xs flex items-center gap-1 hover:bg-amber-800 cursor-pointer font-bold"
+                  title="Preview all 15 Karachi Procedural NPCs & Animals rotating in 3D (Key G)"
+                >
+                  <span>👥 NPCs [G]</span>
+                </button>
                 <button
                   onClick={cycleWeather}
-                  className="px-2.5 py-1 bg-slate-800 rounded-lg border border-slate-700 text-xs flex items-center gap-1.5 hover:bg-slate-700 cursor-pointer"
+                  className="px-2.5 py-1 bg-stone-800 rounded-lg border border-stone-700 text-xs flex items-center gap-1.5 hover:bg-stone-700 cursor-pointer"
                 >
                   {weatherIcons[stats.weather]}
                   <span className="capitalize">{stats.weather.toLowerCase()}</span>
                 </button>
                 <button
                   onClick={toggleSound}
-                  className="px-2.5 py-1 bg-slate-800 rounded-lg border border-slate-700 text-xs flex items-center gap-1 hover:bg-slate-700 cursor-pointer"
+                  className="px-2.5 py-1 bg-stone-800 rounded-lg border border-stone-700 text-xs flex items-center gap-1 hover:bg-stone-700 cursor-pointer"
                 >
                   {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-                  <span>{isMuted ? 'Muted' : 'Sound'}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3D KARACHI STREET NPC GALLERY OVERLAY (Key G) */}
+      {stats.isNPCGalleryOpen && (
+        <div className="absolute inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+          <div className="max-w-4xl w-full bg-stone-900/95 border-2 border-amber-500 rounded-2xl p-4 text-stone-100 shadow-2xl pointer-events-auto">
+            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-stone-700">
+              <div>
+                <h3 className="text-sm sm:text-base font-black font-arcade text-amber-400">
+                  🇵🇰 KARACHI LIVING STREET 3D NPC GALLERY (15 PROCEDURAL CHARACTERS & ANIMALS)
+                </h3>
+                <p className="text-[11px] text-stone-300">
+                  Built 100% from Three.js primitives (Box, Cylinder, Sphere, Cone) with flat-shaded materials & pivot animations.
+                </p>
+              </div>
+              <button
+                onClick={() => engineRef.current?.setNPCGalleryMode(false)}
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs rounded-xl cursor-pointer"
+              >
+                Exit Gallery [G] ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-[10px] font-mono">
+              {[
+                '1. Man (Shalwar Kameez)',
+                '2. Man (Shirt/Pants)',
+                '3. Woman (Dupatta)',
+                '4. Woman (Black Abaya)',
+                '5. School Kid (Uniform)',
+                '6. Quetta Chai Wala',
+                '7. Fruit Thela Seller',
+                '8. Traffic Police (Stop)',
+                '9. Bike / Rickshaw Rider',
+                '10. Laborer (Mazdoor)',
+                '11. Stray Dog (Tail Wag)',
+                '12. Stray Street Cat',
+                '13. Sahiwal Cow / Goat',
+                '14. Donkey Cart (Gadha)',
+                '15. Crows & Pigeons Flock'
+              ].map((label, i) => (
+                <div
+                  key={label}
+                  className={`px-2 py-1 rounded border ${
+                    i < 5
+                      ? 'bg-emerald-950/70 border-emerald-600/50 text-emerald-200'
+                      : i < 10
+                      ? 'bg-amber-950/70 border-amber-600/50 text-amber-200'
+                      : 'bg-stone-800 border-stone-600 text-stone-200'
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3D PAKISTANI BAZAAR SHOP GALLERY OVERLAY (Key H) */}
+      {stats.isShopGalleryOpen && (
+        <div className="absolute inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+          <div className="max-w-4xl w-full bg-stone-900/95 border-2 border-emerald-500 rounded-2xl p-4 text-stone-100 shadow-2xl pointer-events-auto">
+            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-stone-700">
+              <div>
+                <h3 className="text-sm sm:text-base font-black font-arcade text-emerald-400">
+                  🏪 PAKISTANI BAZAAR 3D SHOP GALLERY (12 HAND-PAINTED SHOP BUILDINGS)
+                </h3>
+                <p className="text-[11px] text-stone-300">
+                  Recessed 3D interiors, rolling steel shutters, striped awnings, Urdu/English CanvasTexture signboards & 1–3 story upper floors.
+                </p>
+              </div>
+              <button
+                onClick={() => engineRef.current?.setShopGalleryMode(false)}
+                className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs rounded-xl cursor-pointer"
+              >
+                Exit Shop Gallery [H] ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
+              {[
+                '1. Al-Falah Mobile Shop',
+                '2. Bismillah Hotel & Dhaba',
+                '3. Lahore Bakery & Sweets',
+                '4. Chaudhry Fruit & Sabzi',
+                '5. Madina Medical Store',
+                '6. Haji Cloth House',
+                '7. Gulzar Tailors (Darzi)',
+                '8. Ustad Tyre & Puncture',
+                '9. Shan General Store',
+                '10. Super Cool Juice Corner',
+                '11.VIP Hair Salon (Barber)',
+                '12. Pak Hardware & Paint'
+              ].map((label, i) => (
+                <div
+                  key={label}
+                  className={`px-2 py-1 rounded border ${
+                    i < 6
+                      ? 'bg-emerald-950/70 border-emerald-600/50 text-emerald-200'
+                      : 'bg-amber-950/70 border-amber-600/50 text-amber-200'
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3D PAKISTANI SKYLINE BUILDING GALLERY OVERLAY (Key B — Stages 1–4) */}
+      {stats.isBuildingGalleryOpen && (
+        <div className="absolute inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+          <div className="max-w-5xl w-full bg-stone-900/95 border-2 border-cyan-500 rounded-2xl p-4 text-stone-100 shadow-2xl pointer-events-auto">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2.5 border-b border-stone-700">
+              <div>
+                <h3 className="text-sm sm:text-base font-black font-arcade text-cyan-400">
+                  🏙️ PAKISTANI SKYLINE 3D BUILDING GALLERY [KEY B] — 12 SKYLINE & SET-PIECE BUILDINGS
+                </h3>
+                <p className="text-[11px] text-stone-300">
+                  InstancedMesh windows/balconies/ACs, rooftop clutter (water tanks, solar panels, kites), blinking wedding LEDs, tower cranes & 40% night lit windows.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { id: 0, label: 'All 12 [0]' },
+                  { id: 1, label: 'Stage 1: Apt/Colonial/Plaza [1]' },
+                  { id: 2, label: 'Stage 2: Mosque/Hosp/School/Bank [2]' },
+                  { id: 3, label: 'Stage 3: Shadi/Const/CNG/Gates [3]' }
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    onClick={() => engineRef.current?.setBuildingGalleryStage(st.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer border ${
+                      stats.buildingGalleryStage === st.id
+                        ? 'bg-cyan-500 text-stone-950 border-white'
+                        : 'bg-stone-800 text-stone-200 border-stone-600 hover:bg-stone-700'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+                <button
+                  onClick={cycleWeather}
+                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-stone-950 font-black text-[10px] rounded-lg cursor-pointer"
+                  title="Stage 4: Toggle Day / Night Lighting & Lit Windows"
+                >
+                  🌓 Stage 4 Lighting ({stats.weather})
+                </button>
+                <button
+                  onClick={() => engineRef.current?.setBuildingGalleryMode(false)}
+                  className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-stone-950 font-black text-xs rounded-xl cursor-pointer"
+                >
+                  Exit [B] ✕
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
+              {[
+                '1. Residential Apartment (4–6F)',
+                '2. Old Colonial Heritage (Clock)',
+                '3. Shopping Plaza (LED + Ramp)',
+                '4. Jamia Mosque (Dome + Minarets)',
+                '5. General Hospital (Amb. Bay)',
+                '6. School / College (Playground)',
+                '7. Bank / Office Tower (8–12F)',
+                '8. Wedding Shadi Hall (Blinking LED)',
+                '9. Under-Construction (Tower Crane)',
+                '10. Petrol & CNG Station (Queue)',
+                '11. Old-City Gate (Darwaza)',
+                '12. Badshahi Fort Monument'
+              ].map((label, i) => (
+                <div
+                  key={label}
+                  className={`px-2 py-1 rounded border ${
+                    i < 3
+                      ? 'bg-cyan-950/70 border-cyan-600/50 text-cyan-200'
+                      : i < 7
+                      ? 'bg-emerald-950/70 border-emerald-600/50 text-emerald-200'
+                      : 'bg-amber-950/70 border-amber-600/50 text-amber-200'
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -1153,9 +1715,9 @@ export default function App() {
             {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <div className="flex items-center gap-2">
-                <Palette className="w-6 h-6 text-amber-400" />
+                <Car className="w-6 h-6 text-amber-400" />
                 <h3 className="text-xl sm:text-2xl font-black font-arcade text-amber-400">
-                  TRUCK ART GARAGE & SHOP
+                  3D VEHICLE GARAGE & SHOWROOM
                 </h3>
               </div>
               <div className="flex items-center gap-3">
@@ -1173,7 +1735,7 @@ export default function App() {
             </div>
 
             {/* Tab Navigation */}
-            <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
               <button
                 onClick={() => setGarageTab('VEHICLES')}
                 className={`py-2 rounded-xl font-bold text-xs sm:text-sm transition-colors cursor-pointer ${
@@ -1182,7 +1744,7 @@ export default function App() {
                     : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                 }`}
               >
-                🚐 VEHICLES
+                🏎️ VEHICLES
               </button>
               <button
                 onClick={() => setGarageTab('SKINS')}
@@ -1192,7 +1754,7 @@ export default function App() {
                     : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                 }`}
               >
-                🛺 TRUCK ART SKINS
+                🎨 SKINS & NEON
               </button>
               <button
                 onClick={() => setGarageTab('UPGRADES')}
@@ -1203,6 +1765,16 @@ export default function App() {
                 }`}
               >
                 ⚡ UPGRADES
+              </button>
+              <button
+                onClick={() => setGarageTab('BAZAAR')}
+                className={`py-2 rounded-xl font-bold text-xs sm:text-sm transition-colors cursor-pointer ${
+                  garageTab === 'BAZAAR'
+                    ? 'bg-emerald-400 text-slate-950 font-arcade'
+                    : 'bg-slate-800 text-emerald-300 hover:bg-slate-700 border border-emerald-500/30'
+                }`}
+              >
+                🍵 OPEN BAZAAR
               </button>
             </div>
 
@@ -1228,93 +1800,184 @@ export default function App() {
                           {veh.tagline}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-400 mb-3">{veh.abilityDescription}</p>
-                      <button
-                        onClick={() => selectVehicle(veh)}
-                        className={`w-full py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-transform ${
-                          isEquipped
-                            ? 'bg-emerald-600 text-white cursor-default'
-                            : isUnlocked
-                            ? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
-                            : stats.totalRupees >= veh.price
-                            ? 'bg-gradient-to-r from-yellow-500 to-amber-500 text-slate-950 hover:brightness-110'
-                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                        }`}
-                      >
-                        {isEquipped ? (
-                          <>
-                            <CheckCircle2 className="w-4 h-4" />
-                            <span>EQUIPPED</span>
-                          </>
-                        ) : isUnlocked ? (
-                          <span>SELECT VEHICLE</span>
-                        ) : (
-                          <>
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>UNLOCK ({veh.price} PKR)</span>
-                          </>
+                      <p className="text-xs text-slate-400 mb-2">{veh.abilityDescription}</p>
+
+                      {/* Hero Stat Matrix */}
+                      <div className="grid grid-cols-2 gap-1.5 text-[11px] mb-3 bg-slate-900/60 p-2 rounded-xl border border-slate-800">
+                        <div className="flex justify-between items-center text-slate-400">
+                          <span>Speed:</span>
+                          <span className="font-mono text-amber-400 font-bold">
+                            {'★'.repeat(veh.stats.speed)}{'☆'.repeat(5 - veh.stats.speed)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-400">
+                          <span>Agility:</span>
+                          <span className="font-mono text-cyan-400 font-bold">
+                            {'★'.repeat(veh.stats.agility)}{'☆'.repeat(5 - veh.stats.agility)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-400">
+                          <span>Jump:</span>
+                          <span className="font-mono text-emerald-400 font-bold">
+                            {'★'.repeat(veh.stats.jump)}{'☆'.repeat(5 - veh.stats.jump)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-400">
+                          <span>Armor:</span>
+                          <span className="font-mono text-purple-400 font-bold">
+                            {'★'.repeat(veh.stats.armor)}{'☆'.repeat(5 - veh.stats.armor)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => selectVehicle(veh)}
+                          className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-transform ${
+                            isEquipped
+                              ? 'bg-emerald-600 text-white cursor-default'
+                              : isUnlocked
+                              ? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+                              : stats.totalRupees >= veh.price
+                              ? 'bg-gradient-to-r from-yellow-500 to-amber-500 text-slate-950 hover:brightness-110'
+                              : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          }`}
+                        >
+                          {isEquipped ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>EQUIPPED</span>
+                            </>
+                          ) : isUnlocked ? (
+                            <span>DRIVE VEHICLE</span>
+                          ) : (
+                            <>
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>UNLOCK ({veh.price} PKR)</span>
+                            </>
+                          )}
+                        </button>
+                        {!isUnlocked && !isEquipped && (
+                          <button
+                            onClick={() => rentVehicleTestDrive(veh)}
+                            className="py-2 px-2.5 rounded-xl font-bold text-[11px] bg-cyan-600/80 hover:bg-cyan-500 text-white border border-cyan-400/50 cursor-pointer active:scale-95 transition-transform"
+                            title="Rent this vehicle for a Test Drive (50 PKR)"
+                          >
+                            🔑 RENT (50)
+                          </button>
                         )}
-                      </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             )}
 
-            {/* Tab 1: Skins */}
+            {/* Tab 1: Skins & 3D Neon Underglow */}
             {garageTab === 'SKINS' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {SKINS_DEF.map((skin) => {
-                  const isUnlocked = unlockedSkins.includes(skin.id);
-                  const isEquipped = stats.currentSkin === skin.id;
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-xs font-black font-arcade text-amber-300 uppercase tracking-wider mb-2">
+                    🛺 PAKISTANI TRUCK-ART CHASSIS SKINS (6 REGIONAL STYLES)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {SKINS_DEF.map((skin) => {
+                      const isUnlocked = unlockedSkins.includes(skin.id);
+                      const isEquipped = stats.currentSkin === skin.id;
 
-                  return (
-                    <div
-                      key={skin.id}
-                      className={`p-4 rounded-2xl border transition-all ${
-                        isEquipped
-                          ? 'border-amber-400 bg-amber-500/15 shadow-lg shadow-amber-500/10'
-                          : 'border-slate-800 bg-slate-850/80 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-arcade font-black text-sm text-amber-300">{skin.name}</span>
-                        <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded-full text-slate-300 font-medium">
-                          {skin.city}
-                        </span>
-                      </div>
+                      return (
+                        <div
+                          key={skin.id}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            isEquipped
+                              ? 'border-amber-400 bg-amber-500/15 shadow-lg shadow-amber-500/10'
+                              : 'border-slate-800 bg-slate-850/80 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-arcade font-black text-sm text-amber-300">{skin.name}</span>
+                            <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded-full text-slate-300 font-medium">
+                              {skin.city}
+                            </span>
+                          </div>
 
-                      <p className="text-xs text-slate-400 mb-4 h-10">{skin.description}</p>
+                          <p className="text-xs text-slate-400 mb-4 h-10">{skin.description}</p>
 
-                      <button
-                        onClick={() => selectSkin(skin)}
-                        className={`w-full py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-transform ${
-                          isEquipped
-                            ? 'bg-emerald-600 text-white cursor-default'
-                            : isUnlocked
-                            ? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
-                            : stats.totalRupees >= skin.price
-                            ? 'bg-gradient-to-r from-yellow-500 to-amber-500 text-slate-950 hover:brightness-110'
-                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                        }`}
-                      >
-                        {isEquipped ? (
-                          <>
-                            <CheckCircle2 className="w-4 h-4" />
-                            <span>EQUIPPED</span>
-                          </>
-                        ) : isUnlocked ? (
-                          <span>SELECT & EQUIP</span>
-                        ) : (
-                          <>
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>UNLOCK ({skin.price} PKR)</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  );
-                })}
+                          <button
+                            onClick={() => selectSkin(skin)}
+                            className={`w-full py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-transform ${
+                              isEquipped
+                                ? 'bg-emerald-600 text-white cursor-default'
+                                : isUnlocked
+                                ? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+                                : stats.totalRupees >= skin.price
+                                ? 'bg-gradient-to-r from-yellow-500 to-amber-500 text-slate-950 hover:brightness-110'
+                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                            }`}
+                          >
+                            {isEquipped ? (
+                              <>
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>EQUIPPED</span>
+                              </>
+                            ) : isUnlocked ? (
+                              <span>SELECT & EQUIP</span>
+                            ) : (
+                              <>
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>UNLOCK ({skin.price} PKR)</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 3D Neon Underglow Kits */}
+                <div className="pt-2 border-t border-slate-800">
+                  <h4 className="text-xs font-black font-arcade text-cyan-300 uppercase tracking-wider mb-2">
+                    ✨ 3D NEON CHASSIS UNDERGLOW KITS
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {NEONS_DEF.map((neon) => {
+                      const unlockedList = upgrades.unlockedNeons || ['none'];
+                      const isUnlocked = unlockedList.includes(neon.id) || neon.price === 0;
+                      const isEquipped = (upgrades.activeNeon || 'none') === neon.id;
+                      return (
+                        <div
+                          key={neon.id}
+                          className={`p-3 rounded-2xl border flex items-center justify-between ${
+                            isEquipped
+                              ? 'border-cyan-400 bg-cyan-500/15'
+                              : 'border-slate-800 bg-slate-850/80'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className="w-5 h-5 rounded-full border border-white/40 shadow-md"
+                              style={{ backgroundColor: neon.hex, boxShadow: `0 0 10px ${neon.hex}` }}
+                            />
+                            <span className="text-xs font-bold text-slate-200">{neon.name}</span>
+                          </div>
+                          <button
+                            onClick={() => selectNeonKit(neon)}
+                            className={`px-3 py-1.5 rounded-xl font-bold text-[11px] cursor-pointer active:scale-95 ${
+                              isEquipped
+                                ? 'bg-emerald-600 text-white'
+                                : isUnlocked
+                                ? 'bg-cyan-500 text-slate-950'
+                                : 'bg-amber-500 text-slate-950'
+                            }`}
+                          >
+                            {isEquipped ? 'ACTIVE' : isUnlocked ? 'EQUIP' : `${neon.price} PKR`}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1390,27 +2053,163 @@ export default function App() {
                   )}
                 </div>
 
+                {/* CNG / Petrol Carburetor Fuel Efficiency */}
+                <div className="p-4 rounded-2xl bg-slate-850/80 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base font-bold text-yellow-300 font-arcade">⛽ CNG & Petrol Fuel Efficiency</span>
+                      <span className="text-xs text-slate-400">Level {upgrades.fuelEfficiencyLevel || 1} / 5</span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Tuned Eco-Carburetor: -{((upgrades.fuelEfficiencyLevel || 1) - 1) * 8}% fuel drain per meter
+                    </p>
+                  </div>
+                  {(upgrades.fuelEfficiencyLevel || 1) < 5 ? (
+                    <button
+                      onClick={() => buyUpgrade('fuelEfficiencyLevel', (upgrades.fuelEfficiencyLevel || 1) * 160)}
+                      className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+                    >
+                      UPGRADE ({(upgrades.fuelEfficiencyLevel || 1) * 160} PKR)
+                    </button>
+                  ) : (
+                    <span className="text-xs text-emerald-400 font-bold">MAXED OUT</span>
+                  )}
+                </div>
+
                 {/* Starter Shield Armor */}
                 <div className="p-4 rounded-2xl bg-slate-850/80 border border-slate-800 flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-base font-bold text-emerald-400 font-arcade">🛡️ Starter Shield</span>
-                      <span className="text-xs text-slate-400">{upgrades.starterShield > 0 ? 'Equipped' : 'Locked'}</span>
+                      <span className="text-xs text-slate-400">Level {upgrades.starterShield} / 2</span>
                     </div>
                     <p className="text-xs text-slate-400">
-                      Start every race with active Truck Art protective shield bubble!
+                      Start every race with an active Truck Art protective shield bubble (Lv 2 = Double-Hit)!
                     </p>
                   </div>
-                  {upgrades.starterShield === 0 ? (
+                  {upgrades.starterShield < 2 ? (
                     <button
-                      onClick={() => buyUpgrade('starterShield', 300)}
+                      onClick={() => buyUpgrade('starterShield', (upgrades.starterShield + 1) * 300)}
                       className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
                     >
-                      PURCHASE (300 PKR)
+                      UPGRADE ({(upgrades.starterShield + 1) * 300} PKR)
                     </button>
                   ) : (
-                    <span className="text-xs text-emerald-400 font-bold">READY TO RACE</span>
+                    <span className="text-xs text-emerald-400 font-bold">MAXED OUT</span>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Tab 3: Open Street Bazaar & Dhaba Shop */}
+            {garageTab === 'BAZAAR' && (
+              <div className="space-y-3">
+                {/* Free Daily Bazaar Eidi Gift */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950 via-slate-900 to-amber-950 border-2 border-amber-400/70 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base font-black text-amber-300 font-arcade">🎁 OPEN BAZAAR DAILY EIDI GIFT</span>
+                      <span className="text-[10px] bg-amber-500/20 text-amber-200 px-2 py-0.5 rounded-full font-bold">
+                        FREE REWARD
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300">
+                      Complimentary Mall Road Shopkeeper Eidi bonus (+150 PKR) to spend on boosters or vehicles!
+                    </p>
+                  </div>
+                  <button
+                    onClick={claimDailyEidi}
+                    disabled={dailyEidiClaimed}
+                    className={`px-4 py-2 rounded-xl font-black text-xs cursor-pointer active:scale-95 ${
+                      dailyEidiClaimed
+                        ? 'bg-slate-800 text-slate-500 cursor-default'
+                        : 'bg-gradient-to-r from-yellow-400 to-amber-500 text-slate-950 shadow-lg animate-pulse'
+                    }`}
+                  >
+                    {dailyEidiClaimed ? 'CLAIMED TODAY ✓' : 'CLAIM +150 PKR'}
+                  </button>
+                </div>
+
+                {/* Booster 1: Karak Chai Nitro Headstart */}
+                <div className="p-4 rounded-2xl bg-slate-850/90 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base font-bold text-amber-400 font-arcade">☕ Karak Chai Turbo Headstart</span>
+                      <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full font-mono">
+                        Owned: {upgrades.chaiHeadstartCount || 0}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Auto-activates 6.5s of Chai Nitro Overdrive at the start of your run (1.38x speed & obstacle smash)!
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {stats.state === 'PAUSED' && (
+                      <button
+                        onClick={() => {
+                          if (!engineRef.current) return;
+                          if (stats.totalRupees >= 100 && engineRef.current.spendRupees(100)) {
+                            setShowGarage(false);
+                            engineRef.current.pause();
+                            engineRef.current.activateChaiNitro(true);
+                          } else {
+                            triggerToast('⚠️ Need 100 PKR for Instant Karak Chai Nitro!');
+                          }
+                        }}
+                        className="px-3 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        DRINK NOW (100)
+                      </button>
+                    )}
+                    <button
+                      onClick={() => buyUpgrade('chaiHeadstartCount', 100)}
+                      className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+                    >
+                      BUY (100 PKR)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Booster 2: Emergency Reserve Petrol Can */}
+                <div className="p-4 rounded-2xl bg-slate-850/90 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base font-bold text-emerald-400 font-arcade">⛽ Reserve Petrol Jerrycan</span>
+                      <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-mono">
+                        Owned: {upgrades.reserveFuelCount || 0}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Automatically refills +65% Petrol/CNG the moment your tank hits 0% so you never stall!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => buyUpgrade('reserveFuelCount', 150)}
+                    className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    BUY (150 PKR)
+                  </button>
+                </div>
+
+                {/* Booster 3: VIP Warden Pass / Challan Forgiveness */}
+                <div className="p-4 rounded-2xl bg-slate-850/90 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base font-bold text-purple-400 font-arcade">👮 VIP Warden Challan Pass</span>
+                      <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full font-mono">
+                        Owned: {upgrades.wardenBribeCount || 0}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Automatically excuses 1 fatal crash or police interception, destroying the obstacle and continuing your run!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => buyUpgrade('wardenBribeCount', 220)}
+                    className="px-3.5 py-2 bg-purple-500 hover:bg-purple-400 active:scale-95 text-white font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    BUY (220 PKR)
+                  </button>
                 </div>
               </div>
             )}
@@ -1725,7 +2524,29 @@ export default function App() {
             </div>
           </div>
 
-          {/* Hotkey Toggles (H, C, L, K, G, F + Colorblind) */}
+          {/* Hotkey Toggles (B, Shift+B, H, C, L, K, G, F + Colorblind) */}
+          <div className="grid grid-cols-2 gap-1.5 mb-2">
+            <button
+              onClick={() => engineRef.current?.toggleBoundingBoxDebug()}
+              className={`px-2 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                stats.debugBoundingBoxes
+                  ? 'bg-emerald-600/40 border-emerald-400 text-emerald-200'
+                  : 'bg-slate-900 border-slate-700 text-slate-300'
+              }`}
+            >
+              [B] Box3 + Axes: {stats.debugBoundingBoxes ? 'ON' : 'OFF'}
+            </button>
+            <button
+              onClick={() => engineRef.current?.toggleShowroomMode()}
+              className={`px-2 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                stats.isShowroomMode
+                  ? 'bg-cyan-600/40 border-cyan-400 text-cyan-200'
+                  : 'bg-slate-900 border-slate-700 text-slate-300'
+              }`}
+            >
+              [Shift+B] Showroom: {stats.isShowroomMode ? 'ON' : 'OFF'}
+            </button>
+          </div>
           <div className="grid grid-cols-3 gap-1.5 mb-3">
             <button
               onClick={() => engineRef.current?.toggleHeightOverlay()}
@@ -1832,6 +2653,100 @@ export default function App() {
                 {fuelTestResult.minFuelObserved}%)
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* VEHICLE_SPECS ALIGNMENT VALIDATION & MODEL SHOWROOM HUD (Key B / Shift+B) */}
+      {(stats.debugBoundingBoxes || stats.isShowroomMode) && stats.showroomValidationResults.length > 0 && (
+        <div className="absolute top-3 right-3 z-50 max-w-xl w-full bg-slate-950/92 backdrop-blur-md border-2 border-cyan-400/80 rounded-2xl p-3.5 text-white shadow-2xl font-mono text-[11px] pointer-events-auto">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+            <div className="flex items-center gap-2 text-cyan-300 font-bold">
+              <span>📦 VEHICLE_SPECS BOX3 ALIGNMENT VALIDATOR (1u = 1m, -Z Forward)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {stats.isShowroomMode && (
+                <>
+                  <button
+                    onClick={() => engineRef.current?.cycleShowroomFocus(-1)}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded border border-slate-600 text-xs cursor-pointer"
+                  >
+                    ← Prev
+                  </button>
+                  <button
+                    onClick={() => engineRef.current?.cycleShowroomFocus(1)}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded border border-slate-600 text-xs cursor-pointer"
+                  >
+                    Next →
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => engineRef.current?.toggleShowroomMode()}
+                className={`px-2.5 py-0.5 rounded border font-bold cursor-pointer ${
+                  stats.isShowroomMode
+                    ? 'bg-amber-500 text-slate-950 border-yellow-200'
+                    : 'bg-cyan-700/60 text-cyan-100 border-cyan-400'
+                }`}
+              >
+                {stats.isShowroomMode ? 'Exit Showroom' : 'Open Showroom'}
+              </button>
+              <button
+                onClick={() => {
+                  if (stats.isShowroomMode) engineRef.current?.setShowroomMode(false);
+                  if (stats.debugBoundingBoxes) engineRef.current?.toggleBoundingBoxDebug();
+                }}
+                className="text-slate-400 hover:text-white cursor-pointer ml-1"
+                aria-label="Close Box3 Validator"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-[10px]">
+              <thead>
+                <tr className="text-slate-400 border-b border-slate-800">
+                  <th className="py-1 pr-2">Model</th>
+                  <th className="py-1 pr-2">Spec (L×W×H m)</th>
+                  <th className="py-1 pr-2">Measured Box3</th>
+                  <th className="py-1 pr-2">min.y</th>
+                  <th className="py-1 pr-2">center (x,z)</th>
+                  <th className="py-1">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.showroomValidationResults.map((r) => (
+                  <tr key={r.specKey} className="border-b border-slate-900/80">
+                    <td className="py-1 pr-2 font-bold text-cyan-200">{r.specKey}</td>
+                    <td className="py-1 pr-2 text-slate-300">
+                      {r.expected.length.toFixed(1)}×{r.expected.width.toFixed(1)}×{r.expected.height.toFixed(2)}
+                    </td>
+                    <td className="py-1 pr-2 text-emerald-300">
+                      {r.measured.length.toFixed(2)}×{r.measured.width.toFixed(2)}×{r.measured.height.toFixed(2)}
+                    </td>
+                    <td className="py-1 pr-2 text-amber-300">{r.minY.toFixed(3)}</td>
+                    <td className="py-1 pr-2 text-slate-300">
+                      ({r.centerX.toFixed(2)}, {r.centerZ.toFixed(2)})
+                    </td>
+                    <td className="py-1">
+                      <span
+                        className={`px-1.5 py-0.5 rounded font-bold ${
+                          r.passed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
+                        }`}
+                      >
+                        {r.passed ? 'PASS ✓' : 'WARN'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-1.5 text-[10px] text-slate-400 flex items-center justify-between">
+            <span>Press [B] to toggle Box3 + Axes helpers | [Shift+B] for Model Showroom lineup</span>
+            <span className="text-emerald-400 font-bold">LANE_WIDTH = 3.5m ([-3.5, 0, +3.5])</span>
           </div>
         </div>
       )}

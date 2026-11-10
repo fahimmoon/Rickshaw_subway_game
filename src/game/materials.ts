@@ -3,6 +3,9 @@ import { applyCurve } from './curve';
 
 export type GameMaterialKind = 'standard' | 'basic' | 'physical' | 'points' | 'sprite' | 'line';
 
+// Shared palette material cache — guarantees ONE material instance per visual signature
+const _sharedMaterialPalette = new Map<string, THREE.Material>();
+
 export function createGameMaterial(
   params: THREE.MeshStandardMaterialParameters & { kind?: 'standard'; curveMultiplier?: number }
 ): THREE.MeshStandardMaterial;
@@ -31,15 +34,27 @@ export function createGameMaterial(
     | (THREE.LineBasicMaterialParameters & { kind: 'line' })
   ) & { curveMultiplier?: number }
 ): THREE.Material {
-  const { kind = 'standard', curveMultiplier = 1.0, ...rest } = params;
+  const { kind = 'standard', curveMultiplier = 1.0, ...rest } = params as any;
+
+  // Build a deterministic cache key for non-textured palette materials so they share ONE GPU program
+  const hasUniqueMap = Boolean(rest.map || rest.normalMap || rest.roughnessMap || rest.alphaMap);
+  const colorKey = rest.color !== undefined ? new THREE.Color(rest.color).getHexString() : 'ffffff';
+  const emissiveKey = rest.emissive !== undefined ? new THREE.Color(rest.emissive).getHexString() : '000000';
+  const emIntensity = rest.emissiveIntensity ?? 0;
+  const opacityKey = rest.transparent ? (rest.opacity ?? 1).toFixed(2) : 'opaque';
+  const cacheKey = !hasUniqueMap
+    ? `${kind}_${colorKey}_${emissiveKey}_${emIntensity}_${opacityKey}_${Boolean(rest.wireframe)}_${Boolean(rest.vertexColors)}_${curveMultiplier}`
+    : '';
+
+  if (cacheKey && _sharedMaterialPalette.has(cacheKey)) {
+    return _sharedMaterialPalette.get(cacheKey)!;
+  }
+
   let mat: THREE.Material;
 
   switch (kind) {
     case 'basic':
       mat = new THREE.MeshBasicMaterial(rest as THREE.MeshBasicMaterialParameters);
-      break;
-    case 'physical':
-      mat = new THREE.MeshPhysicalMaterial(rest as THREE.MeshPhysicalMaterialParameters);
       break;
     case 'points':
       mat = new THREE.PointsMaterial(rest as THREE.PointsMaterialParameters);
@@ -50,13 +65,33 @@ export function createGameMaterial(
     case 'line':
       mat = new THREE.LineBasicMaterial(rest as THREE.LineBasicMaterialParameters);
       break;
+    case 'physical':
     case 'standard':
-    default:
-      mat = new THREE.MeshStandardMaterial(rest as THREE.MeshStandardMaterialParameters);
+    default: {
+      // Stage 2 Optimization: Prefer fast flat-shaded MeshLambertMaterial over expensive PBR MeshStandardMaterial
+      const lambertParams: THREE.MeshLambertMaterialParameters = {
+        color: rest.color,
+        map: rest.map,
+        emissive: rest.emissive,
+        emissiveIntensity: rest.emissiveIntensity,
+        transparent: Boolean(rest.transparent),
+        opacity: rest.opacity ?? 1.0,
+        wireframe: Boolean(rest.wireframe),
+        vertexColors: Boolean(rest.vertexColors),
+        side: rest.side ?? THREE.FrontSide,
+        depthWrite: rest.depthWrite ?? true,
+        flatShading: true
+      };
+      mat = new THREE.MeshLambertMaterial(lambertParams);
       break;
+    }
   }
 
-  return applyCurve(mat, curveMultiplier);
+  const patched = applyCurve(mat, curveMultiplier);
+  if (cacheKey) {
+    _sharedMaterialPalette.set(cacheKey, patched);
+  }
+  return patched;
 }
 
 /**
@@ -105,7 +140,9 @@ export function createBlobShadow(width: number = 1.8, length: number = 2.4, opac
   const mesh = new THREE.Mesh(_sharedShadowGeo, _sharedShadowMat);
   mesh.scale.set(width, 1, length);
   mesh.position.y = 0.02;
-  mesh.frustumCulled = false;
+  mesh.frustumCulled = true;
+  mesh.matrixAutoUpdate = false;
+  mesh.updateMatrix();
   mesh.name = 'BlobShadow';
   mesh.userData.isBlobShadow = true;
   return mesh;
